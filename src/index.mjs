@@ -21,19 +21,60 @@ export default function expressXClient(socket, options={}) {
    socket.on("connected", async (connectionId) => {
       if (options.debug) console.log('connected', connectionId)
       // look in sessionStorage for a previously stored connection id
-      const prevCnxId = sessionStorage.getItem('expressxCnxId')
-      if (prevCnxId) {
-         // it's a reconnection: ask server to transfer all data from connection `prevCnxId` to connection `connectionId`
-         socket.emit('cnx-transfer', {
-            from: prevCnxId,
-            to: connectionId,
-         })
-         // update connection id in sessionStorage
-         sessionStorage.setItem('expressxCnxId', connectionId)
+      const prevConnectionId = sessionStorage.getItem('expressx-cnx-id')
+      if (prevConnectionId) {
+         // it's a reconnection
+         if (prevConnectionId < 0) {
+            // ask server to transfer all data from connection `prevConnectionId` to connection `connectionId`
+            if (options.debug) console.log('cnx-transfer', -prevConnectionId, 'to', connectionId)
+            socket.emit('cnx-transfer', {
+               from: -prevConnectionId,
+               to: connectionId,
+            })
+         } else {
+            if (options.debug) console.log('Error, previous connection id should be negative', prevConnectionId)
+         }
+
+      } else {
+         // set/update connection id in sessionStorage
+         sessionStorage.setItem('expressx-cnx-id', connectionId)
       }
       // call user-defined connection callback
       if (onConnectionCallback) onConnectionCallback(connectionId)
    })
+
+   socket.on("cnx-transfer-ack", async (connectionId) => {
+      if (options.debug) console.log('cnx-transfer-ack', connectionId)
+      sessionStorage.setItem('expressx-cnx-id', connectionId)
+   })
+
+
+   // A negative value for session storage 'expressx-cnx-id' means that the connection with the server has been lost
+   // Requests must wait until it goes positive again
+
+   // disconnection due to network issues
+   socket.on("disconnect", async (cause) => {
+      // alert('disconnect')
+      const id = sessionStorage.getItem('expressx-cnx-id')
+      if (id > 0) {
+         sessionStorage.setItem('expressx-cnx-id', -id)
+         sessionStorage.setItem('cause1', 'disconnect')
+      } else {
+         if (options.debug) console.log('Error (disconnect), connection id should be negative', id)
+      }
+   })
+
+   // disconnection due to a page reload
+   window.addEventListener('unload', () => {
+      const id = sessionStorage.getItem('expressx-cnx-id')
+      if (id > 0) {
+         sessionStorage.setItem('expressx-cnx-id', -id)
+         sessionStorage.setItem('cause2', 'unload')
+      } else {
+         if (options.debug) console.log('Error (unload), connection id should be negative', id)
+      }
+   })
+
 
    // on receiving response from service request
    socket.on('client-response', ({ uid, error, result }) => {
@@ -56,18 +97,32 @@ export default function expressXClient(socket, options={}) {
       if (handler) handler(result)
    })
 
+   function wait(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+   }
+
    async function serviceMethodRequest(name, action, ...args) {
-      const uid = v4()
+      // wait while session storage 'expressx-cnx-id' is negative (= connection is lost with server)
+      let retries = 10
+      while (retries-- > 0) {
+         const id = sessionStorage.getItem('expressx-cnx-id')
+         if (id > 0) break
+         console.log('negative!!', id)
+         await wait(200)
+      }
+
       // create a promise which will resolve or reject by an event 'client-response'
+      const uid = v4()
       const promise = new Promise((resolve, reject) => {
          waitingPromisesByUid[uid] = [resolve, reject]
          // a 5s timeout may also reject the promise
          setTimeout(() => {
             delete waitingPromisesByUid[uid]
-            reject(`Error: timeout on service '${name}', action '${action}', args: ${args}`)
+            reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
          }, 5000)
       })
       // send request to server through websocket
+      if (options.debug) console.log('client-request', uid, name, action, args)
       socket.emit('client-request', {
          uid,
          name,

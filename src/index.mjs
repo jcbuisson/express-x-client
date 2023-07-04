@@ -107,9 +107,9 @@ export default function expressXClient(socket, options={}) {
       while (retries-- > 0) {
          const id = sessionStorage.getItem('expressx-cnx-id')
          if (id > 0) break
-         console.log('negative!!', id)
          await wait(200)
       }
+      if (retries === 0) throw new Error(`Timeout waiting for reconnection`)
 
       // create a promise which will resolve or reject by an event 'client-response'
       const uid = v4()

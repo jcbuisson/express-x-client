@@ -1,5 +1,5 @@
 {
-  "name": "express-x-client",
+  "name": "@jcbuisson/express-x-client",
   "version": "1.5.1",
   "type": "module",
   "description": "Client library for ExpressX framework",

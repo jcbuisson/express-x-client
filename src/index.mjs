@@ -58,7 +58,6 @@ export default function expressXClient(socket, options={}) {
       const id = sessionStorage.getItem('expressx-cnx-id')
       if (id > 0) {
          sessionStorage.setItem('expressx-cnx-id', -id)
-         sessionStorage.setItem('cause1', 'disconnect')
       } else {
          if (options.debug) console.log('Error (disconnect), connection id should be negative', id)
       }
@@ -69,7 +68,6 @@ export default function expressXClient(socket, options={}) {
       const id = sessionStorage.getItem('expressx-cnx-id')
       if (id > 0) {
          sessionStorage.setItem('expressx-cnx-id', -id)
-         sessionStorage.setItem('cause2', 'unload')
       } else {
          if (options.debug) console.log('Error (unload), connection id should be negative', id)
       }

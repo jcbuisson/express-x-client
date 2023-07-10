@@ -31,6 +31,8 @@ export default function expressXClient(socket, options={}) {
                from: -prevConnectionId,
                to: connectionId,
             })
+            // set/update connection id in sessionStorage
+            sessionStorage.setItem('expressx-cnx-id', connectionId)
          } else {
             if (options.debug) console.log('Error, previous connection id should be negative', prevConnectionId)
          }

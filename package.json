@@ -1,6 +1,6 @@
 {
   "name": "@jcbuisson/express-x-client",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "type": "module",
   "description": "Client library for ExpressX framework",
   "main": "src/index.mjs",

@@ -11,13 +11,7 @@ import { strict as assert } from 'node:assert'
 import { expressX } from '@jcbuisson/express-x'
 import expressXClient from '../src/index.mjs'
 
-const prisma = new PrismaClient({
-   datasources: {
-      db: {
-         url: "file:./dev.db",
-      },
-   },
-})
+const prisma = new PrismaClient()
 
 // `app` is a regular express application, enhanced with services and real-time features
 const app = expressX(prisma)

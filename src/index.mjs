@@ -8,6 +8,7 @@ export default function expressXClient(socket, options={}) {
    const action2service2handlers = {}
    let onConnectionCallback = null
    let onDisconnectionCallback = null
+   let nodeCnxId
 
    const setConnectionCallback = (callback) => {
       onConnectionCallback = callback
@@ -17,11 +18,24 @@ export default function expressXClient(socket, options={}) {
       onDisconnectionCallback = callback
    }
 
+   function _getCnxId() {
+      if (typeof window !== 'undefined') return sessionStorage.getItem('expressx-cnx-id')
+      return nodeCnxId
+   }
+
+   function _setCnxId(id) {
+      if (typeof window !== 'undefined') {
+         sessionStorage.setItem('expressx-cnx-id', id)
+      } else {
+         nodeCnxId = id
+      }
+   }
+
    // on connection
    socket.on("connected", async (connectionId) => {
       if (options.debug) console.log('connected', connectionId)
-      // look in sessionStorage for a previously stored connection id
-      const prevConnectionId = sessionStorage.getItem('expressx-cnx-id')
+      // look for a previously stored connection id
+      const prevConnectionId = _getCnxId()
       if (prevConnectionId) {
          // it's a reconnection
          if (prevConnectionId < 0) {
@@ -31,15 +45,15 @@ export default function expressXClient(socket, options={}) {
                from: -prevConnectionId,
                to: connectionId,
             })
-            // set/update connection id in sessionStorage
-            sessionStorage.setItem('expressx-cnx-id', connectionId)
+            // set/update connection id
+            _setCnxId(connectionId)
          } else {
             if (options.debug) console.log('Error, previous connection id should be negative', prevConnectionId)
          }
 
       } else {
-         // set/update connection id in sessionStorage
-         sessionStorage.setItem('expressx-cnx-id', connectionId)
+         // set/update connection id
+         _setCnxId(connectionId)
       }
       // call user-defined connection callback
       if (onConnectionCallback) onConnectionCallback(connectionId)
@@ -47,33 +61,34 @@ export default function expressXClient(socket, options={}) {
 
    socket.on("cnx-transfer-ack", async (connectionId) => {
       if (options.debug) console.log('cnx-transfer-ack', connectionId)
-      sessionStorage.setItem('expressx-cnx-id', connectionId)
+      _setCnxId(connectionId)
    })
 
 
-   // A negative value for session storage 'expressx-cnx-id' means that the connection with the server has been lost
+   // A negative value for the connexion id means that the connection with the server has been lost
    // Requests must wait until it goes positive again
 
    // disconnection due to network issues
    socket.on("disconnect", async (cause) => {
-      // alert('disconnect')
-      const id = sessionStorage.getItem('expressx-cnx-id')
+      const id = _getCnxId()
       if (id > 0) {
-         sessionStorage.setItem('expressx-cnx-id', -id)
+         _setCnxId(-id)
       } else {
          if (options.debug) console.log('Error (disconnect), connection id should be negative', id)
       }
    })
 
    // disconnection due to a page reload
-   window.addEventListener('unload', () => {
-      const id = sessionStorage.getItem('expressx-cnx-id')
-      if (id > 0) {
-         sessionStorage.setItem('expressx-cnx-id', -id)
-      } else {
-         if (options.debug) console.log('Error (unload), connection id should be negative', id)
-      }
-   })
+   if (typeof window !== 'undefined') {
+      window.addEventListener('unload', () => {
+         const id = _getCnxId()
+         if (id > 0) {
+            _setCnxId(-id)
+         } else {
+            if (options.debug) console.log('Error (unload), connection id should be negative', id)
+         }
+      })
+   }
 
 
    // on receiving response from service request
@@ -102,10 +117,10 @@ export default function expressXClient(socket, options={}) {
    }
 
    async function serviceMethodRequest(name, action, ...args) {
-      // wait while session storage 'expressx-cnx-id' is negative (= connection is lost with server)
+      // wait while stored connexion id is negative (= connection is lost with server)
       let retries = 10
       while (retries-- > 0) {
-         const id = sessionStorage.getItem('expressx-cnx-id')
+         const id = _getCnxId()
          if (id > 0) break
          await wait(200)
       }

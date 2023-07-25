@@ -1,17 +1,7 @@
-
-function generateUID(length) {
-   const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-   let uid = '';
-
-   for (let i = 0; i < length; i++) {
-     const randomIndex = Math.floor(Math.random() * characters.length)
-     uid += characters.charAt(randomIndex)
-   }
-   return uid
-}
  
 export default function expressXClient(socket, options={}) {
    if (options.debug === undefined) options.debug = false
+   if (options.timeout === undefined) options.timeout = 5000
 
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
@@ -139,11 +129,11 @@ export default function expressXClient(socket, options={}) {
       const uid = generateUID(20)
       const promise = new Promise((resolve, reject) => {
          waitingPromisesByUid[uid] = [resolve, reject]
-         // a 5s timeout may also reject the promise
+         // a timeout may also reject the promise
          setTimeout(() => {
             delete waitingPromisesByUid[uid]
             reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
-         }, 5000)
+         }, options.timeout)
       })
       // send request to server through websocket
       if (options.debug) console.log('client-request', uid, name, action, args)
@@ -183,4 +173,16 @@ export default function expressXClient(socket, options={}) {
       setDisconnectionCallback,
       service,
    }
+}
+
+
+function generateUID(length) {
+   const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+   let uid = '';
+
+   for (let i = 0; i < length; i++) {
+     const randomIndex = Math.floor(Math.random() * characters.length)
+     uid += characters.charAt(randomIndex)
+   }
+   return uid
 }

@@ -1,6 +1,15 @@
 
-import { v4 } from 'uuid'
+function generateUID(length) {
+   const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+   let uid = '';
 
+   for (let i = 0; i < length; i++) {
+     const randomIndex = Math.floor(Math.random() * characters.length)
+     uid += characters.charAt(randomIndex)
+   }
+   return uid
+}
+ 
 export default function expressXClient(socket, options={}) {
    if (options.debug === undefined) options.debug = false
 
@@ -127,7 +136,7 @@ export default function expressXClient(socket, options={}) {
       if (retries === 0) throw new Error(`Timeout waiting for reconnection`)
 
       // create a promise which will resolve or reject by an event 'client-response'
-      const uid = v4()
+      const uid = generateUID(20)
       const promise = new Promise((resolve, reject) => {
          waitingPromisesByUid[uid] = [resolve, reject]
          // a 5s timeout may also reject the promise

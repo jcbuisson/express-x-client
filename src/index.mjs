@@ -19,12 +19,12 @@ export default function expressXClient(socket, options={}) {
    }
 
    function _getCnxId() {
-      if (typeof window !== 'undefined') return sessionStorage.getItem('expressx-cnx-id')
+      if (typeof sessionStorage !== 'undefined') return sessionStorage.getItem('expressx-cnx-id')
       return nodeCnxId
    }
 
    function _setCnxId(id) {
-      if (typeof window !== 'undefined') {
+      if (typeof sessionStorage !== 'undefined') {
          sessionStorage.setItem('expressx-cnx-id', id)
       } else {
          nodeCnxId = id
@@ -79,7 +79,7 @@ export default function expressXClient(socket, options={}) {
    })
 
    // disconnection due to a page reload
-   if (typeof window !== 'undefined') {
+   if (typeof window !== 'undefined' && 'addEventListener' in window) {
       window.addEventListener('unload', () => {
          const id = _getCnxId()
          if (id > 0) {

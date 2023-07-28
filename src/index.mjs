@@ -105,6 +105,7 @@ export default function expressXClient(socket, options={}) {
 
    // on receiving events from pub/sub
    socket.on('service-event', ({ name, action, result }) => {
+      if (options.debug) console.log('service-event', name, action, result)
       if (!action2service2handlers[action]) action2service2handlers[action] = {}
       const serviceHandlers = action2service2handlers[action]
       const handler = serviceHandlers[name]

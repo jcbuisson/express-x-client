@@ -5,6 +5,7 @@ export default function expressXClient(socket, options={}) {
 
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
+   const type2appHandlers = {}
    let onConnectionCallback = null
    let onDisconnectionCallback = null
    let nodeCnxId
@@ -103,13 +104,21 @@ export default function expressXClient(socket, options={}) {
       delete waitingPromisesByUid[uid]
    })
 
-   // on receiving events from pub/sub
+   // on receiving service events from pub/sub
    socket.on('service-event', ({ name, action, result }) => {
       if (options.debug) console.log('service-event', name, action, result)
       if (!action2service2handlers[action]) action2service2handlers[action] = {}
       const serviceHandlers = action2service2handlers[action]
       const handler = serviceHandlers[name]
       if (handler) handler(result)
+   })
+
+   // on receiving application events from pub/sub
+   socket.on('app-event', ({ type, value }) => {
+      if (options.debug) console.log('app-event', type, value)
+      if (!type2appHandlers[type]) type2appHandlers[type] = {}
+      const handler = type2appHandlers[type]
+      if (handler) handler(value)
    })
 
    function wait(ms) {
@@ -147,6 +156,12 @@ export default function expressXClient(socket, options={}) {
       return promise
    }
 
+   // define application events handlers
+   function on(type, handler) {
+      if (!type2appHandlers[type]) type2appHandlers[type] = {}
+      type2appHandlers[type] = handler
+   }
+
    function service(name) {
       const service = {
          // associate a handler to a pub/sub event for this service
@@ -173,6 +188,7 @@ export default function expressXClient(socket, options={}) {
       setConnectionCallback,
       setDisconnectionCallback,
       service,
+      on,
    }
 }
 

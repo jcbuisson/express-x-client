@@ -7,11 +7,16 @@ export default function expressXClient(socket, options={}) {
    const action2service2handlers = {}
    const type2appHandlers = {}
    let onConnectionCallback = null
+   let onReconnectionCallback = null
    let onDisconnectionCallback = null
    let nodeCnxId
 
    const setConnectionCallback = (callback) => {
       onConnectionCallback = callback
+   }
+
+   const setReconnectionCallback = (callback) => {
+      onReconnectionCallback = callback
    }
 
    const setDisconnectionCallback = (callback) => {
@@ -59,9 +64,11 @@ export default function expressXClient(socket, options={}) {
       if (onConnectionCallback) onConnectionCallback(connectionId)
    })
 
-   socket.on("cnx-transfer-ack", async (connectionId) => {
-      if (options.debug) console.log('cnx-transfer-ack', connectionId)
-      _setCnxId(connectionId)
+   socket.on("cnx-transfer-ack", async (connection) => {
+      if (options.debug) console.log('cnx-transfer-ack', connection)
+      _setCnxId(connection.id)
+      // call user-defined reconnection callback
+      if (onReconnectionCallback) onReconnectionCallback(connection)
    })
 
 
@@ -186,6 +193,7 @@ export default function expressXClient(socket, options={}) {
 
    return {
       setConnectionCallback,
+      setReconnectionCallback,
       setDisconnectionCallback,
       service,
       on,

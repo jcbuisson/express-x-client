@@ -13,7 +13,6 @@ function generateUID(length) {
 
 export default function expressXClient(socket, options={}) {
    if (options.debug === undefined) options.debug = false
-   if (options.timeout === undefined) options.timeout = 5000
 
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
@@ -77,7 +76,7 @@ export default function expressXClient(socket, options={}) {
       if (handler) handler(value)
    })
    
-   async function serviceMethodRequest(name, action, ...args) {
+   async function serviceMethodRequest(name, action, options, ...args) {
       // create a promise which will resolve or reject by an event 'client-response'
       const uid = generateUID(20)
       const promise = new Promise((resolve, reject) => {
@@ -99,7 +98,7 @@ export default function expressXClient(socket, options={}) {
       return promise
    }
 
-   function service(name) {
+   function service(name, options={ timeout: 5000 }) {
       const service = {
          // associate a handler to a pub/sub event for this service
          on: (action, handler) => {
@@ -113,7 +112,7 @@ export default function expressXClient(socket, options={}) {
          get(service, action) {
             if (!(action in service)) {
                // newly used property `action`: define it as a service method request function
-               service[action] = (...args) => serviceMethodRequest(name, action, ...args)
+               service[action] = (...args) => serviceMethodRequest(name, action, options, ...args)
             }
             return service[action]
          }

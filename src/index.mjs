@@ -16,6 +16,7 @@ export default function expressXClient(socket, options={}) {
 
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
+   const type2appHandler = {}
    const socketConnectionState = {}
 
    socket.on("connect", async () => {
@@ -67,14 +68,6 @@ export default function expressXClient(socket, options={}) {
       const handler = serviceHandlers[name]
       if (handler) handler(result)
    })
-
-   // on receiving application events from pub/sub
-   socket.on('app-event', ({ type, value }) => {
-      if (options.debug) console.log('app-event', type, value)
-      if (!type2appHandlers[type]) type2appHandlers[type] = {}
-      const handler = type2appHandlers[type]
-      if (handler) handler(value)
-   })
    
    async function serviceMethodRequest(name, action, options, ...args) {
       // create a promise which will resolve or reject by an event 'client-response'
@@ -120,10 +113,26 @@ export default function expressXClient(socket, options={}) {
       return new Proxy(service, handler)
    }
 
+   ///////////////         APPLICATION-LEVEL EVENTS         /////////////////
+
+   // There is a need for events sent outside any service method call, for example on unsolicited-by-frontend backend state change
+   socket.on('app-event', ({ type, value }) => {
+      if (options.debug) console.log('app-event', type, value)
+      if (!type2appHandler[type]) type2appHandler[type] = {}
+      const handler = type2appHandler[type]
+      if (handler) handler(value)
+   })
+
+   // add application event handler
+   function on(type, handler) {
+      type2appHandler[type] = handler
+   }
+
    return {
       socketConnection,
       socketStatus,
       service,
+      on,
    }
 }
 

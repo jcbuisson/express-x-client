@@ -17,35 +17,57 @@ export default function expressXClient(socket, options={}) {
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
    const type2appHandler = {}
-   const socketConnectionState = {}
+   // const socketConnectionState = {}
+   let connectHandler = null
+   let connectErrorHandler = null
+   let disconnectHandler = null
 
    socket.on("connect", async () => {
       console.log("socket connected", socket.id)
-      if (socketConnectionState.resolve) {
-         socketConnectionState.resolve('ok')
-         socketConnectionState.status = 'connected'
-      }
+      // if (socketConnectionState.resolve) {
+      //    socketConnectionState.resolve('ok')
+      //    socketConnectionState.status = 'connected'
+      // }
+      if (connectHandler) connectHandler(socket)
    })
 
-   socket.on("error", async () => {
+   socket.on("connect_error", async () => {
       console.log("socket connection error", socket.id)
-      if (socketConnectionState.reject) {
-         socketConnectionState.reject(err)
-         socketConnectionState.status = 'error'
-      }
+      // if (socketConnectionState.reject) {
+      //    socketConnectionState.reject(err)
+      //    socketConnectionState.status = 'error'
+      // }
+      if (connectErrorHandler) connectErrorHandler(socket)
    })
 
-   async function socketConnection() {
-      const promise = new Promise((resolve, reject) => {
-         socketConnectionState.resolve = resolve
-         socketConnectionState.reject = reject
-      })
-      return promise
+   socket.on("disconnect", async () => {
+      if (disconnectHandler) disconnectHandler(socket)
+   })
+
+   function onConnect(func) {
+      connectHandler = func
    }
 
-   function socketStatus() {
-      return socketConnectionState.status
+   function onConnectError(func) {
+      connectErrorHandler = func
    }
+
+   function onDisconnect(func) {
+      disconnectHandler = func
+   }
+
+
+   // async function socketConnection() {
+   //    const promise = new Promise((resolve, reject) => {
+   //       socketConnectionState.resolve = resolve
+   //       socketConnectionState.reject = reject
+   //    })
+   //    return promise
+   // }
+
+   // function socketStatus() {
+   //    return socketConnectionState.status
+   // }
 
    // on receiving response from service request
    socket.on('client-response', ({ uid, error, result }) => {
@@ -115,7 +137,8 @@ export default function expressXClient(socket, options={}) {
 
    ///////////////         APPLICATION-LEVEL EVENTS         /////////////////
 
-   // There is a need for events sent outside any service method call, for example on unsolicited-by-frontend backend state change
+   // There is a need for application-wide events sent outside any service method call, for example when backend state changes
+   // without front-end interactions
    socket.on('app-event', ({ type, value }) => {
       if (options.debug) console.log('app-event', type, value)
       if (!type2appHandler[type]) type2appHandler[type] = {}
@@ -123,14 +146,16 @@ export default function expressXClient(socket, options={}) {
       if (handler) handler(value)
    })
 
-   // add application event handler
+   // add a handler for application-wide events
    function on(type, handler) {
       type2appHandler[type] = handler
    }
 
    return {
-      socketConnection,
-      socketStatus,
+      onConnect,
+      onConnectError,
+      onDisconnect,
+   
       service,
       on,
    }

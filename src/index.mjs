@@ -24,20 +24,12 @@ export default function expressXClient(socket, options={}) {
 
    socket.on("connect", async () => {
       console.log("socket connected", socket.id)
-      // if (socketConnectionState.resolve) {
-      //    socketConnectionState.resolve('ok')
-      //    socketConnectionState.status = 'connected'
-      // }
       if (connectHandler) connectHandler(socket)
    })
 
-   socket.on("connect_error", async () => {
+   socket.on("connect_error", async (err) => {
       console.log("socket connection error", socket.id)
-      // if (socketConnectionState.reject) {
-      //    socketConnectionState.reject(err)
-      //    socketConnectionState.status = 'error'
-      // }
-      if (connectErrorHandler) connectErrorHandler(socket)
+      if (connectErrorHandler) connectErrorHandler(socket, err)
    })
 
    socket.on("disconnect", async () => {
@@ -55,19 +47,6 @@ export default function expressXClient(socket, options={}) {
    function onDisconnect(func) {
       disconnectHandler = func
    }
-
-
-   // async function socketConnection() {
-   //    const promise = new Promise((resolve, reject) => {
-   //       socketConnectionState.resolve = resolve
-   //       socketConnectionState.reject = reject
-   //    })
-   //    return promise
-   // }
-
-   // function socketStatus() {
-   //    return socketConnectionState.status
-   // }
 
    // on receiving response from service request
    socket.on('client-response', ({ uid, error, result }) => {
@@ -143,12 +122,14 @@ export default function expressXClient(socket, options={}) {
       if (options.debug) console.log('app-event', type, value)
       if (!type2appHandler[type]) type2appHandler[type] = {}
       const handler = type2appHandler[type]
+      console.log('handler', handler)
       if (handler) handler(value)
    })
 
    // add a handler for application-wide events
    function on(type, handler) {
       type2appHandler[type] = handler
+      console.log('type2appHandler[type]', type2appHandler[type])
    }
 
    return {
@@ -160,4 +141,3 @@ export default function expressXClient(socket, options={}) {
       on,
    }
 }
-

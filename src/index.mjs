@@ -17,35 +17,40 @@ export default function expressXClient(socket, options={}) {
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
    const type2appHandler = {}
-   // const socketConnectionState = {}
-   let connectHandler = null
-   let connectErrorHandler = null
-   let disconnectHandler = null
+   const connectHandlers = []
+   const connectErrorHandlers = []
+   const disconnectHandlers = []
 
    socket.on("connect", async () => {
       console.log("socket connected", socket.id)
-      if (connectHandler) connectHandler(socket)
+      for (const handler of connectHandlers) {
+         handler(socket)
+      }
    })
 
    socket.on("connect_error", async (err) => {
       console.log("socket connection error", socket.id)
-      if (connectErrorHandler) connectErrorHandler(socket, err)
+      for (const handler of connectErrorHandlers) {
+         handler(socket, err)
+      }
    })
 
    socket.on("disconnect", async () => {
-      if (disconnectHandler) disconnectHandler(socket)
+      for (const handler of disconnectHandlers) {
+         handler(socket)
+      }
    })
 
    function onConnect(func) {
-      connectHandler = func
+      connectHandlers.push(func)
    }
 
    function onConnectError(func) {
-      connectErrorHandler = func
+      connectErrorHandlers.push(func)
    }
 
    function onDisconnect(func) {
-      disconnectHandler = func
+      disconnectHandlers.push(func)
    }
 
    // on receiving response from service request

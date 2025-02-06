@@ -91,10 +91,12 @@ export default function expressXClient(socket, options={}) {
       const promise = new Promise((resolve, reject) => {
          waitingPromisesByUid[uid] = [resolve, reject]
          // a timeout may also reject the promise
-         setTimeout(() => {
-            delete waitingPromisesByUid[uid]
-            reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
-         }, serviceOptions.timeout)
+         if (serviceOptions.timeout && !serviceOptions.volatile) {
+            setTimeout(() => {
+               delete waitingPromisesByUid[uid]
+               reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
+            }, serviceOptions.timeout)
+         }
       })
       // send request to server through websocket
       if (options.debug) console.log('client-request', uid, name, action, args)

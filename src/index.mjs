@@ -17,34 +17,50 @@ export default function expressXClient(socket, options={}) {
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
    const type2appHandler = {}
-   let connectHandler = null
-   let connectErrorHandler = null
-   let disconnectHandler = null
+   let connectListeners = []
+   let disconnectListeners = []
+   let errorListeners = []
 
    socket.on("connect", async () => {
       console.log("socket connected", socket.id)
-      if (connectHandler) connectHandler(socket)
+      for (const func of connectListeners) {
+         func(socket)
+      }
    })
 
    socket.on("connect_error", async (err) => {
       console.log("socket connection error", socket.id)
-      if (connectErrorHandler) connectErrorHandler(socket, err)
+      for (const func of errorListeners) {
+         func(socket)
+      }
    })
 
    socket.on("disconnect", async () => {
-      if (disconnectHandler) disconnectHandler(socket)
+      console.log("socket disconnected", socket.id)
+      for (const func of disconnectListeners) {
+         func(socket)
+      }
    })
 
-   function onConnect(func) {
-      connectHandler = func
+   function addConnectListener(func) {
+      connectListeners.push(func)
+   }
+   function removeConnectListener(func) {
+      connectListeners = connectListeners.filter(f !== func)
    }
 
-   function onConnectError(func) {
-      connectErrorHandler = func
+   function addDisconnectListener(func) {
+      disconnectListeners.push(func)
+   }
+   function removeDisonnectListener(func) {
+      disconnectListeners = disconnectListeners.filter(f !== func)
    }
 
-   function onDisconnect(func) {
-      disconnectHandler = func
+   function addErrorListener(func) {
+      errorListeners.push(func)
+   }
+   function removeErrorListener(func) {
+      errorListeners = errorListeners.filter(f !== func)
    }
 
    // on receiving response from service request
@@ -134,9 +150,12 @@ export default function expressXClient(socket, options={}) {
    }
 
    return {
-      onConnect,
-      onConnectError,
-      onDisconnect,
+      addConnectListener,
+      removeConnectListener,
+      addDisconnectListener,
+      removeDisonnectListener,
+      addErrorListener,
+      removeErrorListener,
    
       service,
       on,

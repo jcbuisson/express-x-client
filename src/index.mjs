@@ -1,7 +1,7 @@
 
 function generateUID(length) {
    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-   let uid = '';
+   let uid = ''
 
    for (let i = 0; i < length; i++) {
      const randomIndex = Math.floor(Math.random() * characters.length)
@@ -17,7 +17,6 @@ export default function expressXClient(socket, options={}) {
    const waitingPromisesByUid = {}
    const action2service2handlers = {}
    const type2appHandler = {}
-   // const socketConnectionState = {}
    let connectHandler = null
    let connectErrorHandler = null
    let disconnectHandler = null
@@ -47,19 +46,6 @@ export default function expressXClient(socket, options={}) {
    function onDisconnect(func) {
       disconnectHandler = func
    }
-
-
-   // async function socketConnection() {
-   //    const promise = new Promise((resolve, reject) => {
-   //       socketConnectionState.resolve = resolve
-   //       socketConnectionState.reject = reject
-   //    })
-   //    return promise
-   // }
-
-   // function socketStatus() {
-   //    return socketConnectionState.status
-   // }
 
    // on receiving response from service request
    socket.on('client-response', ({ uid, error, result }) => {
@@ -96,16 +82,18 @@ export default function expressXClient(socket, options={}) {
       })
       // send request to server through websocket
       if (options.debug) console.log('client-request', uid, name, action, args)
-      socket.emit('client-request', {
-         uid,
-         name,
-         action,
-         args,
-      })
+      if (serviceOptions.volatile) {
+         // event is not sent if connection is not active
+         socket.volatile.emit('client-request', { uid, name, action, args, })
+      } else {
+         // event is buffered if connection is not active (default)
+         socket.emit('client-request', { uid, name, action, args, })
+      }
       return promise
    }
 
-   function service(name, serviceOptions={ timeout: 20000 }) {
+   function service(name, serviceOptions={}) {
+      if (serviceOptions.timeout === undefined) serviceOptions.timeout = 20000
       const service = {
          // associate a handler to a pub/sub event for this service
          on: (action, handler) => {

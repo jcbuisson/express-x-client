@@ -22,21 +22,21 @@ export default function expressXClient(socket, options={}) {
    let errorListeners = []
 
    socket.on("connect", async () => {
-      console.log("socket connected", socket.id)
+      if (options.debug) console.log("socket connected", socket.id)
       for (const func of connectListeners) {
          func(socket)
       }
    })
 
    socket.on("connect_error", async (err) => {
-      console.log("socket connection error", socket.id)
+      if (options.debug) console.log("socket connection error", socket.id)
       for (const func of errorListeners) {
          func(socket)
       }
    })
 
    socket.on("disconnect", async () => {
-      console.log("socket disconnected", socket.id)
+      if (options.debug) console.log("socket disconnected", socket.id)
       for (const func of disconnectListeners) {
          func(socket)
       }
@@ -141,14 +141,12 @@ export default function expressXClient(socket, options={}) {
       if (options.debug) console.log('app-event', type, value)
       if (!type2appHandler[type]) type2appHandler[type] = {}
       const handler = type2appHandler[type]
-      console.log('handler', handler)
       if (handler) handler(value)
    })
 
    // add a handler for application-wide events
    function on(type, handler) {
       type2appHandler[type] = handler
-      console.log('type2appHandler[type]', type2appHandler[type])
    }
 
    return {

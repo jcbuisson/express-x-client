@@ -49,21 +49,21 @@ export function createClient(socket, options={}) {
       connectListeners.push(func)
    }
    function removeConnectListener(func) {
-      connectListeners = connectListeners.filter(f !== func)
+      connectListeners = connectListeners.filter(f => f !== func)
    }
 
    function addDisconnectListener(func) {
       disconnectListeners.push(func)
    }
-   function removeDisonnectListener(func) {
-      disconnectListeners = disconnectListeners.filter(f !== func)
+   function removeDisconnectListener(func) {
+      disconnectListeners = disconnectListeners.filter(f => f !== func)
    }
 
    function addErrorListener(func) {
       errorListeners.push(func)
    }
    function removeErrorListener(func) {
-      errorListeners = errorListeners.filter(f !== func)
+      errorListeners = errorListeners.filter(f => f !== func)
    }
 
    // on receiving response from service request
@@ -95,10 +95,11 @@ export function createClient(socket, options={}) {
          waitingPromisesByUid[uid] = [resolve, reject]
          // a timeout may also reject the promise
          if (serviceOptions.timeout && !serviceOptions.volatile) {
-            setTimeout(() => {
+            const timer = setTimeout(() => {
                delete waitingPromisesByUid[uid]
                reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
             }, serviceOptions.timeout)
+            if (timer.unref) timer.unref(); // so it doesn't prevent process exit for tests (Node.js only — no-op in browsers)
          }
       })
       // send request to server through websocket
@@ -136,13 +137,14 @@ export function createClient(socket, options={}) {
       return new Proxy(service, handler)
    }
 
+   //--------------------         APPLICATION-LEVEL EVENTS         --------------------
+
    // There is a need for application-wide events sent outside any service method call, for example when backend state changes
    // without front-end interactions
    socket.on('app-event', ({ type, value }) => {
       if (options.debug) console.log('app-event', type, value)
-      if (!type2appHandler[type]) type2appHandler[type] = {}
       const handler = type2appHandler[type]
-      if (handler) handler(value)
+      if (typeof handler === 'function') handler(value)
    })
 
    // add a handler for application-wide events
@@ -150,28 +152,17 @@ export function createClient(socket, options={}) {
       type2appHandler[type] = handler
    }
 
-   function connect() {
-      if (options.debug) console.log('connecting...')
-      socket.connect()
-   }
-
-   function disconnect() {
-      if (options.debug) console.log('disconnecting...')
-      socket.disconnect()
-   }
-
    const app = {
       configure,
       addConnectListener,
       removeConnectListener,
       addDisconnectListener,
-      removeDisonnectListener,
+      removeDisconnectListener,
       addErrorListener,
       removeErrorListener,
    
       service,
       on,
-      connect, disconnect,
    }
 
    return app
@@ -179,7 +170,7 @@ export function createClient(socket, options={}) {
 
 
 //////////////////////////       RELOAD PLUGIN       //////////////////////////
-// enrich `app` with listeners handling socket data transfer on page reload
+// Enrich `app` with listeners handling socket data transfer on page reload
 
 export async function reloadPlugin(app) {
 
@@ -188,19 +179,12 @@ export async function reloadPlugin(app) {
    app.addConnectListener(async (socket) => {
       const socketId = socket.id
       console.log('connect', socketId)
-      // handle reconnections & reloads
-      // look for a previously stored connection id
       const prevSocketId = cnxid.value
       if (prevSocketId) {
-         // it's a connection after a reload/refresh
-         // ask server to transfer all data from connection `prevSocketId` to connection `socketId`
          console.log('cnx-transfer', prevSocketId, 'to', socketId)
          await socket.emit('cnx-transfer', prevSocketId, socketId)
-         // update connection id
          cnxid.value = socketId
-
       } else {
-         // set connection id
          cnxid.value = socketId
       }
 
@@ -210,29 +194,22 @@ export async function reloadPlugin(app) {
 
       socket.on('cnx-transfer-error', async (fromSocketId, toSocketId) => {
          console.log('ERR ERR!!!', fromSocketId, toSocketId)
-         // appState.value.unrecoverableError = true
       })
    })
 }
 
 
 //////////////////////////       OFFLINE PLUGIN       //////////////////////////
-// enrich `app` with methods, attributes and listeners to handle offline-first database access
+// Enrich `app` with methods, attributes and listeners to handle offline-first crud database access
 
 export function offlinePlugin(app) {
+
+   const modelSyncFunctions = []
 
    function createOfflineModel(modelName, fields) {
 
       const dbName = modelName;
       const db = getOrCreateDB(dbName, fields);
-
-      db.open().then(() => {
-         // console.log('db ready', dbName, modelName)
-      });
-
-      db.values.hook("updating", (changes, primaryKey, previousValue) => {
-         // console.log("CHANGES", primaryKey, changes, previousValue);
-      });
 
       const reset = async () => {
          console.log('reset', modelName);
@@ -252,20 +229,30 @@ export function offlinePlugin(app) {
 
       app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT updateWithMeta`, value);
-         await db.values.put(value);
+         // value may be undefined when the server's UPDATE RETURNING yielded 0 rows
+         // (concurrent delete race: record was removed between the sync's findMany
+         // snapshot and the actual UPDATE).  Guard to avoid a TypeError crash that
+         // would prevent db.metadata.put(meta) from running.
+         if (value?.uid) await db.values.put(value);
          await db.metadata.put(meta);
       });
 
       app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT deleteWithMeta`, value)
-         await db.values.delete(value.uid)
-         await db.metadata.put(meta)
+         // value may be undefined when the server's DELETE RETURNING yielded 0 rows
+         // (double-delete race).  Guard before accessing .uid.
+         if (value?.uid) await db.values.delete(value.uid)
+         // delete, not put: synchronize() step 2 also deletes idbMetadata for the same
+         // uid.  If the pub/sub handler fires AFTER step 2, put() would re-create the
+         // metadata row as a permanent orphan.  delete() is idempotent regardless of order.
+         await db.metadata.delete(meta.uid)
       });
 
 
       /////////////          CREATE/UPDATE/REMOVE          /////////////
 
       async function create(data) {
+         // in offline-first context, uid is created client-side, since server may not be accessible
          const uid = uuidv7()
          // optimistic update
          const now = new Date()
@@ -278,6 +265,7 @@ export function offlinePlugin(app) {
                console.log(`*** err sync ${modelName} create`, err)
                // rollback
                await db.values.delete(uid)
+               await db.metadata.delete(uid)
             })
          }
          return await db.values.get(uid)
@@ -298,8 +286,11 @@ export function offlinePlugin(app) {
                // rollback
                delete previousValue.uid
                await db.values.update(uid, previousValue)
-               delete previousMetadata.uid
-               await db.metadata.update(uid, previousMetadata)
+               // Only restore updated_at — the optimistic write only touched that field.
+               // Restoring the full previousMetadata snapshot would overwrite any
+               // deleted_at that remove() set while the socket round-trip was in flight,
+               // silently un-deleting the record.
+               await db.metadata.update(uid, { updated_at: previousMetadata.updated_at ?? null })
             })
          }
          return await db.values.get(uid)
@@ -337,7 +328,6 @@ export function offlinePlugin(app) {
 
       function getObservable(where = {}) {
          addSynchroWhere(where).then((isNew: boolean) => {
-            // console.log('getObservable addSynchroWhere', modelName, where, isNew);
             if (isNew && app.isConnected) {
                synchronize(modelName, db.values, db.metadata, where, app.disconnectedDate)
             }
@@ -378,6 +368,8 @@ export function offlinePlugin(app) {
          }
       })
 
+      modelSyncFunctions.push(synchronizeAll)
+
       return {
          db, reset,
          create, update, remove,
@@ -391,8 +383,11 @@ export function offlinePlugin(app) {
    app.addConnectListener(async (_socket) => {
       app.connectedDate = new Date()
       console.log('onConnect', app.connectedDate)
-      app.disconnectedDate = null
       app.isConnected = true
+      if (app.disconnectedDate) {
+         modelSyncFunctions.forEach(sync => sync())
+      }
+      app.disconnectedDate = null
    })
 
    app.addDisconnectListener(async (_socket) => {
@@ -410,7 +405,6 @@ export function offlinePlugin(app) {
       await mutex.acquire()
       console.log('synchronize', modelName, where)
 
-      let toAdd = []
       try {
          const requestPredicate = wherePredicate(where)
 
@@ -429,41 +423,51 @@ export function offlinePlugin(app) {
          }
 
          // call sync service on `where` perimeter
-         const syncResult = await app.service('sync').go(modelName, where, cutoffDate, clientMetadataDict)
-         toAdd = syncResult.toAdd
-         const { toUpdate, toDelete, addDatabase, updateDatabase } = syncResult
-         console.log('-> service.sync', modelName, where, toAdd, toUpdate, toDelete, addDatabase, updateDatabase)
+         const { addClient, updateClient, deleteClient, addDatabase, updateDatabase } =
+            await app.service('sync').go(modelName, where, cutoffDate, clientMetadataDict)
+         console.log('-> service.sync', modelName, where, addClient, updateClient, deleteClient, addDatabase, updateDatabase)
 
          // 1- add missing elements in indexedDB cache
-         // Use a single transaction for all adds to ensure atomicity
-         if (toAdd.length > 0) {
+         // Use a single transaction for all adds to ensure atomicity.
+         // put() instead of add() for metadata: a deleteWithMeta pub/sub event leaves
+         // an orphaned metadata row (value deleted, metadata kept with deleted_at).
+         // add() would throw a ConstraintError on that orphan; put() upserts safely.
+         if (addClient.length > 0) {
             await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
-               for (const [value, metaData] of toAdd) {
-                  await idbValues.add(value)
-                  await idbMetadata.add(metaData)
+               for (const [value, metaData] of addClient) {
+                  // put() instead of add(): if create() ran concurrently and added this
+                  // uid to Dexie between the idbValues.filter snapshot and this step,
+                  // add() would throw ConstraintError and abort the entire transaction,
+                  // silently dropping every other addClient record in the batch.
+                  await idbValues.put(value)
+                  await idbMetadata.put(metaData)
                }
             })
          }
          // 2- delete elements from indexedDB cache
-         for (const [uid, deleted_at] of toDelete) {
+         for (const [uid] of deleteClient) {
             await idbValues.delete(uid)
-            await idbMetadata.update(uid, { deleted_at })
+            await idbMetadata.delete(uid)
          }
-         // 3- update elements of cache
-         for (const elt of toUpdate) {
-            // get full value of element to update
-            const value = await app.service(modelName).findUnique({ where:{ uid: elt.uid }})
+         // 3- update elements of cache with server's newer version
+         for (const [elt, serverMeta] of updateClient) {
+            const value = { ...elt }
             delete value.uid
             delete value.__deleted__
             await idbValues.update(elt.uid, value)
-            const metadata = await idbMetadata.get(elt.uid)
-            await idbMetadata.update(elt.uid, { updated_at: metadata.updated_at })
+            await idbMetadata.update(elt.uid, { updated_at: serverMeta.updated_at })
          }
 
          // 4- create elements of `addDatabase` with full data from cache
          for (const elt of addDatabase) {
+            // elt.uid is undefined when the clientMetadataDict fallback {} was used
+            // (record exists in idbValues but metadata is missing).  Guard before the
+            // get() call: idbValues.get(undefined) itself throws before fullValue is
+            // assigned, so checking fullValue == null afterwards is too late.
+            if (elt.uid == null) continue
             const fullValue = await idbValues.get(elt.uid)
             const meta = await idbMetadata.get(elt.uid)
+            if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
@@ -478,19 +482,17 @@ export function offlinePlugin(app) {
 
          // 5- update elements of `updateDatabase` with full data from cache
          for (const elt of updateDatabase) {
+            if (elt.uid == null) continue
             const fullValue = await idbValues.get(elt.uid)
             const meta = await idbMetadata.get(elt.uid)
+            if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
                await app.service(modelName).updateWithMeta(elt.uid, fullValue, meta.updated_at)
             } catch(err) {
                console.log("*** err sync user updateDatabase", err)
-               // rollback
-               const previousDatabaseValue = await app.service(modelName).findUnique({ where:{ uid: elt.uid }})
-               const previousDatabaseMetadata = await app.service('metadata').findUnique({ where:{ uid: elt.uid }})
-               await idbValues.update(elt.uid, previousDatabaseValue)
-               await idbMetadata.update(elt.uid, previousDatabaseMetadata)
+               // Leave client's local version intact; it will be retried on the next sync.
             }
          }
       } catch(err) {
@@ -500,30 +502,20 @@ export function offlinePlugin(app) {
       }
    }
 
-   function wherePredicate(where) {
-      return (elt) => {
-         for (const [attr, value] of Object.entries(where)) {
-            const eltAttrValue = elt[attr]
+   // Singleton map to reuse Dexie instances per database name
+   const dbInstances = new Map();
 
-            if (typeof(value) === 'string' || typeof(value) === 'number') {
-               // 'attr = value' clause
-               if (eltAttrValue !== value) return false
-
-            } else if (typeof(value) === 'object') {
-               // 'attr = { lt/lte/gt/gte: value }' clause
-               if (value.lte) {
-                  if (eltAttrValue > value.lte) return false
-               } else if (value.lt) {
-                  if (eltAttrValue >= value.lt) return false
-               } else if (value.gte) {
-                  if (eltAttrValue < value.gte) return false
-               } else if (value.gt) {
-                  if (eltAttrValue <= value.gt) return false
-               }
-            }
-         }
-         return true
+   function getOrCreateDB(dbName: string, fields: string[]) {
+      if (!dbInstances.has(dbName)) {
+         const db = new Dexie(dbName);
+         db.version(1).stores({
+            whereList: "sortedjson",
+            values: ['uid', '__deleted__', ...fields].join(','),
+            metadata: "uid, created_at, updated_at, deleted_at",
+         });
+         dbInstances.set(dbName, db);
       }
+      return dbInstances.get(dbName);
    }
 
    async function getWhereList(whereDb) {
@@ -568,22 +560,6 @@ export function offlinePlugin(app) {
       }
    }
 
-   // Singleton map to reuse Dexie instances per database name
-   const dbInstances = new Map();
-
-   function getOrCreateDB(dbName: string, fields: string[]) {
-      if (!dbInstances.has(dbName)) {
-         const db = new Dexie(dbName);
-         db.version(1).stores({
-            whereList: "sortedjson",
-            values: ['uid', '__deleted__', ...fields].join(','),
-            metadata: "uid, created_at, updated_at, deleted_at",
-         });
-         dbInstances.set(dbName, db);
-      }
-      return dbInstances.get(dbName);
-   }
-
    // enrich `app` with new methods and attributes
    return Object.assign(app, {
       createOfflineModel,
@@ -603,7 +579,6 @@ function generateUID(length) {
    }
    return uid
 }
-
 
 function stringifyWithSortedKeys(obj, space = null) {
    return JSON.stringify(obj, (key, value) => {
@@ -646,10 +621,49 @@ export class Mutex {
    }
 }
 
+function wherePredicate(where) {
+   return (elt) => {
+      for (const [attr, value] of Object.entries(where)) {
+         const eltAttrValue = elt[attr]
+
+         if (typeof(value) === 'string' || typeof(value) === 'number' || typeof(value) === 'boolean') {
+            // 'attr = value' clause
+            if (eltAttrValue !== value) return false
+
+         } else if (value === null) {
+            // 'attr = null' clause
+            if (eltAttrValue !== null) return false
+
+         } else if (typeof(value) === 'object') {
+            // 'attr = { lt/lte/gt/gte: value }' clause — all bounds apply.
+            // A missing (undefined) or null field never satisfies a range constraint,
+            // consistent with SQL NULL behaviour (NULL op anything = NULL = unknown).
+            // JS coerces null → 0 so range guards like `null > 10` silently pass;
+            // undefined coerces to NaN and all NaN comparisons return false — both
+            // must be excluded explicitly.
+            if (eltAttrValue === undefined || eltAttrValue === null) return false
+            if ('lte' in value && eltAttrValue > value.lte) return false
+            if ('lt'  in value && eltAttrValue >= value.lt)  return false
+            if ('gte' in value && eltAttrValue < value.gte)  return false
+            if ('gt'  in value && eltAttrValue <= value.gt)  return false
+         }
+      }
+      return true
+   }
+}
+
 function isSubset(subset, fullObject) {
-   // return Object.entries(subset).some(([key, value]) => fullObject[key] === value)
    for (const key in fullObject) {
-      if (fullObject[key] !== subset[key]) return false
+      const fVal = fullObject[key]
+      const sVal = subset[key]
+      // Primitive values: use reference/value equality (works for string, number, boolean).
+      // Object values (e.g. range operators { gte: 1 }): use structural equality via
+      // sorted JSON so that two freshly-created identical objects compare as equal.
+      if (typeof fVal === 'object' && fVal !== null) {
+         if (stringifyWithSortedKeys(fVal) !== stringifyWithSortedKeys(sVal)) return false
+      } else {
+         if (fVal !== sVal) return false
+      }
    }
    return true
 }
@@ -663,4 +677,3 @@ function isSubsetAmong(subset, fullObjectList) {
    return fullObjectList.some(fullObject => isSubset(subset, fullObject));
 }
 // console.log('isSubsetAmong({a: 1, b: 2}, [{c: 3}, {b: 2}])=true', isSubsetAmong({a: 1, b: 2}, [{c: 3}, {b: 2}]))
-

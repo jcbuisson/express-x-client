@@ -13,7 +13,6 @@ import { useSessionStorage } from '@vueuse/core'
 export function createClient(socket, options={}) {
    if (options.debug === undefined) options.debug = false
 
-   const waitingPromisesByUid = {}
    const action2service2handlers = {}
    const type2appHandler = {}
    let connectListeners = []
@@ -66,19 +65,6 @@ export function createClient(socket, options={}) {
       errorListeners = errorListeners.filter(f => f !== func)
    }
 
-   // on receiving response from service request
-   socket.on('client-response', ({ uid, error, result }) => {
-      if (options.debug) console.log('client-response', uid, error, result)
-      if (!waitingPromisesByUid[uid]) return // may not exist because a timeout removed it
-      const [resolve, reject] = waitingPromisesByUid[uid]
-      if (error) {
-         reject(error)
-      } else {
-         resolve(result)
-      }
-      delete waitingPromisesByUid[uid]
-   })
-
    // on receiving service events from pub/sub
    socket.on('service-event', ({ name, action, result }) => {
       if (options.debug) console.log('service-event', name, action, result)
@@ -89,29 +75,14 @@ export function createClient(socket, options={}) {
    })
    
    async function serviceMethodRequest(name, action, serviceOptions, ...args) {
-      // create a promise which will resolve or reject by an event 'client-response'
-      const uid = generateUID(20)
-      const promise = new Promise((resolve, reject) => {
-         waitingPromisesByUid[uid] = [resolve, reject]
-         // a timeout may also reject the promise
-         if (serviceOptions.timeout && !serviceOptions.volatile) {
-            const timer = setTimeout(() => {
-               delete waitingPromisesByUid[uid]
-               reject(`Error: timeout on service '${name}', action '${action}', args: ${JSON.stringify(args)}`)
-            }, serviceOptions.timeout)
-            if (timer.unref) timer.unref(); // so it doesn't prevent process exit for tests (Node.js only — no-op in browsers)
-         }
-      })
-      // send request to server through websocket
-      if (options.debug) console.log('client-request', uid, name, action, args)
-      if (serviceOptions.volatile) {
-         // event is not sent if connection is not active
-         socket.volatile.emit('client-request', { uid, name, action, args, })
-      } else {
-         // event is buffered if connection is not active (default)
-         socket.emit('client-request', { uid, name, action, args, })
-      }
-      return promise
+      if (options.debug) console.log('client-request', name, action, args)
+      // use socket.io acknowledgment for request/response correlation
+      const emitter = serviceOptions.volatile
+         ? socket.volatile
+         : socket.timeout(serviceOptions.timeout || 20000)
+      const { error, result } = await emitter.emitWithAck('client-request', { name, action, args })
+      if (error) throw error
+      return result
    }
 
    function service(name, serviceOptions={}) {
@@ -569,16 +540,6 @@ export function offlinePlugin(app) {
 
 //////////////////////////       UTILITIES       //////////////////////////
 
-function generateUID(length) {
-   const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-   let uid = ''
-
-   for (let i = 0; i < length; i++) {
-     const randomIndex = Math.floor(Math.random() * characters.length)
-     uid += characters.charAt(randomIndex)
-   }
-   return uid
-}
 
 function stringifyWithSortedKeys(obj, space = null) {
    return JSON.stringify(obj, (key, value) => {

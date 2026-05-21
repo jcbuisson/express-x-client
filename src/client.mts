@@ -153,19 +153,17 @@ export async function reloadPlugin(app) {
       const prevSocketId = cnxid.value
       if (prevSocketId) {
          console.log('cnx-transfer', prevSocketId, 'to', socketId)
-         await socket.emit('cnx-transfer', prevSocketId, socketId)
-         cnxid.value = socketId
+         socket.once('cnx-transfer-ack', async (fromSocketId, toSocketId) => {
+            console.log('ACK ACK!!!', fromSocketId, toSocketId)
+            cnxid.value = socketId
+         })
+         socket.once('cnx-transfer-error', async (fromSocketId, toSocketId) => {
+            console.log('ERR ERR!!!', fromSocketId, toSocketId)
+         })
+         socket.emit('cnx-transfer', prevSocketId, socketId)
       } else {
          cnxid.value = socketId
       }
-
-      socket.on('cnx-transfer-ack', async (fromSocketId, toSocketId) => {
-         console.log('ACK ACK!!!', fromSocketId, toSocketId)
-      })
-
-      socket.on('cnx-transfer-error', async (fromSocketId, toSocketId) => {
-         console.log('ERR ERR!!!', fromSocketId, toSocketId)
-      })
    })
 }
 

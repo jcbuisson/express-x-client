@@ -159,6 +159,7 @@ export async function reloadPlugin(app) {
          })
          socket.once('cnx-transfer-error', async (fromSocketId, toSocketId) => {
             console.log('ERR ERR!!!', fromSocketId, toSocketId)
+            cnxid.value = socketId
          })
          socket.emit('cnx-transfer', prevSocketId, socketId)
       } else {
@@ -314,7 +315,7 @@ export function offlinePlugin(app) {
       
       function addSynchroWhere(where: object) {
          const promise = addSynchroDBWhere(where, db.whereList)
-         promise.then(isNew => isNew && count++ && console.log(`addSynchroWhere (${count})`, dbName, modelName, where))
+         promise.then(isNew => isNew && console.log(`addSynchroWhere (${++count})`, dbName, modelName, where))
          return promise
       }
 
@@ -435,14 +436,13 @@ export function offlinePlugin(app) {
             // assigned, so checking fullValue == null afterwards is too late.
             if (elt.uid == null) continue
             const fullValue = await idbValues.get(elt.uid)
-            const meta = await idbMetadata.get(elt.uid)
             if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
-               await app.service(modelName).createWithMeta(elt.uid, fullValue, meta.created_at)
+               await app.service(modelName).createWithMeta(elt.uid, fullValue, elt.created_at)
             } catch(err) {
-               console.log("*** err sync user addDatabase", err, elt.uid, fullValue, meta.created_at)
+               console.log("*** err sync user addDatabase", err, elt.uid, fullValue, elt.created_at)
                // rollback
                await idbValues.delete(elt.uid)
                await idbMetadata.delete(elt.uid)
@@ -453,12 +453,11 @@ export function offlinePlugin(app) {
          for (const elt of updateDatabase) {
             if (elt.uid == null) continue
             const fullValue = await idbValues.get(elt.uid)
-            const meta = await idbMetadata.get(elt.uid)
             if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
-               await app.service(modelName).updateWithMeta(elt.uid, fullValue, meta.updated_at)
+               await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
             } catch(err) {
                console.log("*** err sync user updateDatabase", err)
                // Leave client's local version intact; it will be retried on the next sync.

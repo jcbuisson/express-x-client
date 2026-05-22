@@ -71,7 +71,7 @@ export function createClient(socket, options={}) {
       if (!action2service2handlers[action]) action2service2handlers[action] = {}
       const serviceHandlers = action2service2handlers[action]
       const handler = serviceHandlers[name]
-      if (handler) handler(result)
+      if (handler) Promise.resolve(handler(result)).catch(err => console.error('service-event handler error', name, action, err))
    })
    
    async function serviceMethodRequest(name, action, serviceOptions, ...args) {
@@ -415,9 +415,13 @@ export function offlinePlugin(app) {
             })
          }
          // 2- delete elements from indexedDB cache
-         for (const [uid] of deleteClient) {
-            await idbValues.delete(uid)
-            await idbMetadata.delete(uid)
+         if (deleteClient.length > 0) {
+            await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
+               for (const [uid] of deleteClient) {
+                  await idbValues.delete(uid)
+                  await idbMetadata.delete(uid)
+               }
+            })
          }
          // 3- update elements of cache with server's newer version
          for (const [elt, serverMeta] of updateClient) {

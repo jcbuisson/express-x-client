@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import { from } from 'rxjs';
-import { distinctUntilChanged } from 'rxjs/operators';
+import { distinctUntilChanged, startWith } from 'rxjs/operators';
 import { liveQuery } from "dexie";
 // uuidv7 are monotonically increasing and much improve database performance amid B-tree indexes
 import { v7 as uuidv7 } from 'uuid';
@@ -304,6 +304,7 @@ export function offlinePlugin(app) {
          })
          const predicate = wherePredicate(where)
          return from(liveQuery(() => db.values.filter(value => !value.__deleted__ && predicate(value)).toArray())).pipe(
+            startWith(undefined),
             distinctUntilChanged((prev, curr) => {
                // Deep equality check to prevent unnecessary emissions (in particular on database write)
                return JSON.stringify(prev) === JSON.stringify(curr)

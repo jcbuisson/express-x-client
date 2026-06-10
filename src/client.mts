@@ -304,7 +304,7 @@ export function offlinePlugin(app) {
          })
          const predicate = wherePredicate(where)
          return from(liveQuery(() => db.values.filter(value => !value.__deleted__ && predicate(value)).toArray())).pipe(
-            startWith(undefined),
+            // startWith(undefined),
             distinctUntilChanged((prev, curr) => {
                // Deep equality check to prevent unnecessary emissions (in particular on database write)
                return JSON.stringify(prev) === JSON.stringify(curr)

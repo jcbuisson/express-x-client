@@ -1,6 +1,6 @@
 import Dexie from "dexie";
-import { from } from 'rxjs';
-import { distinctUntilChanged, startWith } from 'rxjs/operators';
+import { from, defer } from 'rxjs';
+import { distinctUntilChanged, startWith, switchMap } from 'rxjs/operators';
 import { liveQuery } from "dexie";
 // uuidv7 are monotonically increasing and much improve database performance amid B-tree indexes
 import { v7 as uuidv7 } from 'uuid';
@@ -297,19 +297,33 @@ export function offlinePlugin(app) {
       /////////////          REAL-TIME OBSERVABLE          /////////////
 
       function getObservable(where = {}) {
-         addSynchroWhere(where).then((isNew: boolean) => {
-            if (isNew && app.isConnected) {
-               synchronize(modelName, db.values, db.metadata, where, app.disconnectedDate)
-            }
-         })
          const predicate = wherePredicate(where)
-         return from(liveQuery(() => db.values.filter(value => !value.__deleted__ && predicate(value)).toArray())).pipe(
-            // startWith(undefined),
+         const liveQuery$ = from(liveQuery(() => db.values.filter(value => !value.__deleted__ && predicate(value)).toArray())).pipe(
             distinctUntilChanged((prev, curr) => {
                // Deep equality check to prevent unnecessary emissions (in particular on database write)
                return JSON.stringify(prev) === JSON.stringify(curr)
             })
          )
+         
+         // Delay subscribing to liveQuery until the cache is up to date: if `where` is a
+         // newly-registered filter and we're online, wait for synchronize() to complete
+         // first, so the first emission is already the fully synced data (or [] if truly
+         // empty). Otherwise (warm cache or offline) there's nothing to wait for.
+         //
+         // defer() gates the liveQuery subscription:
+         //   - defer re-runs the setup on each subscription, calling addSynchroWhere(where) to get isNew.
+         //   - If isNew && app.isConnected, it chains synchronize(...) before switching to liveQuery$, so the first emission already reflects
+         //   the fully-synced cache ([] only if genuinely empty).
+         //   - If !isNew or offline, the .then resolves to undefined immediately and switchMap subscribes to liveQuery$ right away — same
+         //   behavior as before.
+         return defer(() => {
+            const ready = addSynchroWhere(where).then((isNew: boolean) => {
+               if (isNew && app.isConnected) {
+                  return synchronize(modelName, db.values, db.metadata, where, app.disconnectedDate)
+               }
+            })
+            return from(ready).pipe(switchMap(() => liveQuery$))
+         })
       }
 
       let count = 0;

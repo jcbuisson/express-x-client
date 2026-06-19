@@ -26,7 +26,11 @@ export function createClient(socket, options={}) {
    socket.on("connect", async () => {
       if (options.debug) console.log("socket connected", socket.id)
       for (const func of connectListeners) {
-         func(socket)
+         try {
+            await func(socket)
+         } catch(err) {
+            console.error('connect listener error', err)
+         }
       }
    })
 
@@ -369,8 +373,14 @@ export function offlinePlugin(app) {
       app.connectedDate = new Date()
       console.log('onConnect', app.connectedDate)
       app.isConnected = true
-      if (app.disconnectedDate) {
-         modelSyncFunctions.forEach(sync => sync())
+      const disconnectedDate = app.disconnectedDate
+      if (disconnectedDate) {
+         const results = await Promise.allSettled(modelSyncFunctions.map(sync => sync()))
+         const failures = results.filter(result => result.status === 'rejected')
+         if (failures.length > 0) {
+            console.error('err reconnect synchronizeAll', failures.map(result => result.reason))
+            return
+         }
       }
       app.disconnectedDate = null
    })
@@ -483,6 +493,7 @@ export function offlinePlugin(app) {
          }
       } catch(err) {
          console.log('err synchronize', modelName, where, err)
+         throw err
       } finally {
          mutex.release()
       }

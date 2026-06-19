@@ -35,7 +35,7 @@ Enriches `app` with offline-first IndexedDB CRUD via Dexie. Call `app.createOffl
 This plugin also adds three dynamic attributes to `app`:
 - `app.isConnected` — boolean, updated on socket connect/disconnect
 - `app.connectedDate` — `Date` of the last connection, or `null`
-- `app.disconnectedDate` — `Date` of the last disconnection, or `null` (used as `cutoffDate` for sync)
+- `app.disconnectedDate` — `Date` of the last disconnection, or `null`
 
 Each model maintains three Dexie stores under the same DB name:
 - `values` — the actual records (indexed on `uid`, `__deleted__`)
@@ -47,7 +47,7 @@ Each model maintains three Dexie stores under the same DB name:
 
 **Optimistic writes**: `create`, `update`, `remove` write to IndexedDB immediately, then call the server service method. On server error they roll back the local change.
 
-**Sync on reconnect**: When the socket reconnects, every registered model calls `synchronizeAll`, which iterates its `whereList` and calls the server's `sync.go(modelName, where, cutoffDate, clientMetadataDict)` service. The response contains five buckets (`addClient`, `updateClient`, `deleteClient`, `addDatabase`, `updateDatabase`) that are applied in order.
+**Sync on reconnect**: When the socket reconnects, every registered model calls `synchronizeAll`, which iterates its `whereList` and calls the server's `sync.go(modelName, where, clientMetadataDict)` service. The response contains five buckets (`addClient`, `updateClient`, `deleteClient`, `addDatabase`, `updateDatabase`) that are applied in order.
 
 **Real-time observables**: `getObservable(where)` returns an RxJS `Observable` backed by Dexie's `liveQuery`. It also registers the `where` in `whereList` and triggers a sync if it is a new, unregistered filter. Vue component lifecycle cleanup is handled by `tryOnScopeDispose`.
 

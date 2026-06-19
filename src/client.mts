@@ -184,6 +184,8 @@ export function offlinePlugin(app) {
 
       const dbName = modelName;
       const db = getOrCreateDB(dbName, fields);
+      const synchronizedWhereKeys = new Set();
+      const synchronizeWherePromises = new Map();
 
       const reset = async () => {
          console.log('reset', modelName);
@@ -322,8 +324,9 @@ export function offlinePlugin(app) {
          //   behavior as before.
          return defer(() => {
             const ready = addSynchroWhere(where).then((isNew: boolean) => {
-               if (isNew && app.isConnected) {
-                  return synchronize(modelName, db.values, db.metadata, where, app.disconnectedDate)
+               const whereKey = stringifyWithSortedKeys(where)
+               if (app.isConnected && (isNew || !synchronizedWhereKeys.has(whereKey))) {
+                  return synchronizeWhere(where)
                }
             })
             return from(ready).pipe(switchMap(() => liveQuery$))
@@ -341,11 +344,27 @@ export function offlinePlugin(app) {
       function removeSynchroWhere(where: object) {
          console.log('removeSynchroWhere', dbName, modelName, where)
          count -= 1
+         synchronizedWhereKeys.delete(stringifyWithSortedKeys(where))
          return removeSynchroDBWhere(where, db.whereList)
       }
 
       async function synchronizeAll() {
-         await synchronizeModelWhereList(modelName, db.values, db.metadata, app.disconnectedDate, db.whereList)
+         await synchronizeModelWhereList(modelName, db.values, db.metadata, db.whereList, synchronizeWhere)
+      }
+
+      async function synchronizeWhere(where) {
+         const whereKey = stringifyWithSortedKeys(where)
+         if (!synchronizeWherePromises.has(whereKey)) {
+            const promise = synchronize(modelName, db.values, db.metadata, where)
+               .then(() => {
+                  synchronizedWhereKeys.add(whereKey)
+               })
+               .finally(() => {
+                  synchronizeWherePromises.delete(whereKey)
+               })
+            synchronizeWherePromises.set(whereKey, promise)
+         }
+         return synchronizeWherePromises.get(whereKey)
       }
 
       // Automatically clean up when the component using this composable unmounts
@@ -369,12 +388,16 @@ export function offlinePlugin(app) {
       }
    }
 
+   let hasConnected = false
+
    app.addConnectListener(async (_socket) => {
       app.connectedDate = new Date()
       console.log('onConnect', app.connectedDate)
       app.isConnected = true
       const disconnectedDate = app.disconnectedDate
-      if (disconnectedDate) {
+      const isInitialConnect = !hasConnected
+      hasConnected = true
+      if (disconnectedDate || isInitialConnect) {
          const results = await Promise.allSettled(modelSyncFunctions.map(sync => sync()))
          const failures = results.filter(result => result.status === 'rejected')
          if (failures.length > 0) {
@@ -396,7 +419,7 @@ export function offlinePlugin(app) {
    const mutex = new Mutex()
 
    // ex: where = { uid: 'azer' }
-   async function synchronize(modelName, idbValues, idbMetadata, where, cutoffDate) {
+   async function synchronize(modelName, idbValues, idbMetadata, where) {
       await mutex.acquire()
       console.log('synchronize', modelName, where)
 
@@ -419,7 +442,7 @@ export function offlinePlugin(app) {
 
          // call sync service on `where` perimeter
          const { addClient, updateClient, deleteClient, addDatabase, updateDatabase } =
-            await app.service('sync').go(modelName, where, cutoffDate, clientMetadataDict)
+            await app.service('sync').go(modelName, where, clientMetadataDict)
          console.log('-> service.sync', modelName, where, addClient, updateClient, deleteClient, addDatabase, updateDatabase)
 
          // 1- add missing elements in indexedDB cache
@@ -550,10 +573,11 @@ export function offlinePlugin(app) {
       }
    }
 
-   async function synchronizeModelWhereList(modelName, idbValues, idbMetadata, cutoffDate, whereDb) {
+   async function synchronizeModelWhereList(modelName, idbValues, idbMetadata, whereDb, syncWhere = null) {
       const whereList = await getWhereList(whereDb)
       for (const where of whereList) {
-         await synchronize(modelName, idbValues, idbMetadata, where, cutoffDate)
+         if (syncWhere) await syncWhere(where)
+         else await synchronize(modelName, idbValues, idbMetadata, where)
       }
    }
 

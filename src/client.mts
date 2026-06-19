@@ -233,10 +233,16 @@ export function offlinePlugin(app) {
          // optimistic update
          const now = new Date()
          await db.values.add({ uid, ...data })
-         await db.metadata.add({ uid, created_at: now })
+         await db.metadata.add({ uid, created_at: now, __dirty__: true })
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
             app.service(modelName).createWithMeta(uid, data, now)
+            .then(async result => {
+               const [value, meta] = Array.isArray(result) ? result : []
+               if (value?.uid) await db.values.put(value)
+               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
+               else await db.metadata.update(uid, { __dirty__: false })
+            })
             .catch(async err => {
                console.log(`*** err sync ${modelName} create`, err)
                // rollback
@@ -253,10 +259,16 @@ export function offlinePlugin(app) {
          // optimistic update of cache
          const now = new Date()
          await db.values.update(uid, data)
-         await db.metadata.update(uid, { updated_at: now })
+         await db.metadata.update(uid, { updated_at: now, __dirty__: true })
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
             app.service(modelName).updateWithMeta(uid, data, now)
+            .then(async result => {
+               const [value, meta] = Array.isArray(result) ? result : []
+               if (value?.uid) await db.values.put(value)
+               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
+               else await db.metadata.update(uid, { __dirty__: false })
+            })
             .catch(async err => {
                console.log(`*** err sync ${modelName} update`, err)
                // rollback
@@ -266,7 +278,10 @@ export function offlinePlugin(app) {
                // Restoring the full previousMetadata snapshot would overwrite any
                // deleted_at that remove() set while the socket round-trip was in flight,
                // silently un-deleting the record.
-               await db.metadata.update(uid, { updated_at: previousMetadata.updated_at ?? null })
+               await db.metadata.update(uid, {
+                  updated_at: previousMetadata.updated_at ?? null,
+                  __dirty__: previousMetadata.__dirty__ ?? false,
+               })
             })
          }
          return await db.values.get(uid)
@@ -276,15 +291,20 @@ export function offlinePlugin(app) {
          const deleted_at = new Date()
          // optimistic delete in cache
          await db.values.update(uid, { __deleted__: true })
-         await db.metadata.update(uid, { deleted_at })
+         await db.metadata.update(uid, { deleted_at, __dirty__: true })
          // and in database, if connected
          if (app.isConnected) {
             app.service(modelName).deleteWithMeta(uid, deleted_at)
+            .then(async result => {
+               const [, meta] = Array.isArray(result) ? result : []
+               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
+               else await db.metadata.update(uid, { __dirty__: false })
+            })
             .catch(async err => {
                console.log(`*** err sync ${modelName} remove`, err)
                // rollback
                await db.values.update(uid, { __deleted__: null })
-               await db.metadata.update(uid, { deleted_at: null })
+               await db.metadata.update(uid, { deleted_at: null, __dirty__: false })
             })
          }
       }
@@ -439,6 +459,12 @@ export function offlinePlugin(app) {
                clientMetadataDict[value.uid] = {}
             }
          }
+         const dirtyMetadataList = await idbMetadata.filter(metadata => metadata.__dirty__).toArray()
+         for (const metadata of dirtyMetadataList) {
+            if (metadata.uid in clientMetadataDict) continue
+            const value = await idbValues.get(metadata.uid)
+            if (value || metadata.deleted_at) clientMetadataDict[metadata.uid] = metadata
+         }
 
          // call sync service on `where` perimeter
          const { addClient, updateClient, deleteClient, addDatabase, updateDatabase } =
@@ -458,7 +484,7 @@ export function offlinePlugin(app) {
                   // add() would throw ConstraintError and abort the entire transaction,
                   // silently dropping every other addClient record in the batch.
                   await idbValues.put(value)
-                  await idbMetadata.put(metaData)
+                  await idbMetadata.put({ ...metaData, __dirty__: false })
                }
             })
          }
@@ -476,7 +502,7 @@ export function offlinePlugin(app) {
             const value = { ...elt }
             delete value.__deleted__
             await idbValues.put(value)
-            await idbMetadata.put({ uid: elt.uid, ...serverMeta })
+            await idbMetadata.put({ uid: elt.uid, ...serverMeta, __dirty__: false })
          }
 
          // 4- create elements of `addDatabase` with full data from cache
@@ -491,7 +517,10 @@ export function offlinePlugin(app) {
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
-               await app.service(modelName).createWithMeta(elt.uid, fullValue, elt.created_at)
+               const result = await app.service(modelName).createWithMeta(elt.uid, fullValue, elt.created_at)
+               const serverMeta = Array.isArray(result) ? result[1] : null
+               if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
+               else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {
                console.log("*** err sync user addDatabase", err, elt.uid, fullValue, elt.created_at)
                // rollback
@@ -508,7 +537,10 @@ export function offlinePlugin(app) {
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
-               await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
+               const result = await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
+               const serverMeta = Array.isArray(result) ? result[1] : null
+               if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
+               else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {
                console.log("*** err sync user updateDatabase", err)
                // Leave client's local version intact; it will be retried on the next sync.

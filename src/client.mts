@@ -441,10 +441,9 @@ export function offlinePlugin(app) {
          // 3- update elements of cache with server's newer version
          for (const [elt, serverMeta] of updateClient) {
             const value = { ...elt }
-            delete value.uid
             delete value.__deleted__
-            await idbValues.update(elt.uid, value)
-            await idbMetadata.update(elt.uid, { updated_at: serverMeta.updated_at })
+            await idbValues.put(value)
+            await idbMetadata.put({ uid: elt.uid, ...serverMeta })
          }
 
          // 4- create elements of `addDatabase` with full data from cache

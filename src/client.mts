@@ -706,10 +706,11 @@ export function offlinePlugin(app) {
       await mutex.acquire()
       let modified = false
       try {
-         const whereList = await getWhereList(whereDb)
-         if (!isSubsetAmong(where, whereList)) {
+         const sortedjson = stringifyWithSortedKeys(where)
+         const existing = await whereDb.get(sortedjson)
+         if (!existing) {
             // sortedjson is used as a unique standardized representation of a 'where' object ; it is used both as key and value in 'wheredb' database
-            await whereDb.add({ sortedjson: stringifyWithSortedKeys(where) })
+            await whereDb.add({ sortedjson })
             modified = true
          }
       } catch(err) {

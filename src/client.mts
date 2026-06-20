@@ -200,6 +200,11 @@ export function offlinePlugin(app) {
       app.service(modelName).on('createWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT createWithMeta`, value);
          if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
+         if (!value?.uid && meta?.deleted_at) {
+            await db.values.delete(meta.uid)
+            await db.metadata.delete(meta.uid)
+            return
+         }
          if (value?.uid) await db.values.put(value);
          if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
       });
@@ -211,6 +216,11 @@ export function offlinePlugin(app) {
          // snapshot and the actual update). Guard to avoid a TypeError crash that
          // would prevent db.metadata.put(meta) from running.
          if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
+         if (!value?.uid && meta?.deleted_at) {
+            await db.values.delete(meta.uid)
+            await db.metadata.delete(meta.uid)
+            return
+         }
          if (value?.uid) await db.values.put(value);
          if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
       });

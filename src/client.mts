@@ -304,6 +304,8 @@ export function offlinePlugin(app) {
             .then(result => applyUpdateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} update`, err)
+               const currentMetadata = await db.metadata.get(uid)
+               if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, now)) return
                // rollback
                delete previousValue.uid
                await db.values.update(uid, previousValue)

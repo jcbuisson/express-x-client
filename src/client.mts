@@ -617,6 +617,11 @@ export function offlinePlugin(app) {
                   await idbMetadata.delete(elt.uid)
                   continue
                }
+               if (Array.isArray(result) && result[0]?.uid) {
+                  const returnedValue = { ...result[0] }
+                  delete returnedValue.__deleted__
+                  await idbValues.put(returnedValue)
+               }
                if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
                else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {
@@ -647,6 +652,11 @@ export function offlinePlugin(app) {
                   await idbValues.delete(elt.uid)
                   await idbMetadata.delete(elt.uid)
                   continue
+               }
+               if (Array.isArray(result) && result[0]?.uid) {
+                  const returnedValue = { ...result[0] }
+                  delete returnedValue.__deleted__
+                  await idbValues.put(returnedValue)
                }
                if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
                else await idbMetadata.update(elt.uid, { __dirty__: false })

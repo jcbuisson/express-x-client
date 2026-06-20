@@ -534,6 +534,8 @@ export function offlinePlugin(app) {
          if (deleteClient.length > 0) {
             await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
                for (const [uid] of deleteClient) {
+                  const currentMetadata = await idbMetadata.get(uid)
+                  if (!metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[uid])) continue
                   await idbValues.delete(uid)
                   await idbMetadata.delete(uid)
                }
@@ -541,6 +543,8 @@ export function offlinePlugin(app) {
          }
          // 3- update elements of cache with server's newer version
          for (const [elt, serverMeta] of updateClient) {
+            const currentMetadata = await idbMetadata.get(elt.uid)
+            if (!metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[elt.uid])) continue
             const value = { ...elt }
             delete value.__deleted__
             await idbValues.put(value)
@@ -594,6 +598,14 @@ export function offlinePlugin(app) {
       } finally {
          mutex.release()
       }
+   }
+
+   function metadataUnchangedSinceRequest(currentMetadata, requestMetadata) {
+      return currentMetadata
+         && requestMetadata
+         && sameTimestamp(currentMetadata.created_at, requestMetadata.created_at)
+         && sameTimestamp(currentMetadata.updated_at, requestMetadata.updated_at)
+         && sameTimestamp(currentMetadata.deleted_at, requestMetadata.deleted_at)
    }
 
    // Singleton map to reuse Dexie instances per database name

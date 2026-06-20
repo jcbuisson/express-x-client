@@ -205,9 +205,9 @@ export function offlinePlugin(app) {
 
       app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT updateWithMeta`, value);
-         // value may be undefined when the server's UPDATE RETURNING yielded 0 rows
+         // value may be undefined when the server's update yielded 0 rows
          // (concurrent delete race: record was removed between the sync's findMany
-         // snapshot and the actual UPDATE).  Guard to avoid a TypeError crash that
+         // snapshot and the actual update). Guard to avoid a TypeError crash that
          // would prevent db.metadata.put(meta) from running.
          if (value?.uid) await db.values.put(value);
          await db.metadata.put(meta);
@@ -215,12 +215,12 @@ export function offlinePlugin(app) {
 
       app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT deleteWithMeta`, value)
-         // value may be undefined when the server's DELETE RETURNING yielded 0 rows
-         // (double-delete race).  Guard before accessing .uid.
+         // value may be undefined when the server's delete yielded 0 rows
+         // (double-delete race).
          if (value?.uid) await db.values.delete(value.uid)
          // delete, not put: synchronize() step 2 also deletes idbMetadata for the same
-         // uid.  If the pub/sub handler fires AFTER step 2, put() would re-create the
-         // metadata row as a permanent orphan.  delete() is idempotent regardless of order.
+         // uid. If the pub/sub handler fires AFTER step 2, put() would re-create the
+         // metadata row as a permanent orphan. delete() is idempotent regardless of order.
          await db.metadata.delete(meta.uid)
       });
 
@@ -237,12 +237,7 @@ export function offlinePlugin(app) {
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
             app.service(modelName).createWithMeta(uid, data, now)
-            .then(async result => {
-               const [value, meta] = Array.isArray(result) ? result : []
-               if (value?.uid) await db.values.put(value)
-               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
-               else await db.metadata.update(uid, { __dirty__: false })
-            })
+            .then(result => applyCreateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} create`, err)
                // rollback
@@ -251,6 +246,38 @@ export function offlinePlugin(app) {
             })
          }
          return await db.values.get(uid)
+      }
+
+      async function applyCreateAcknowledgement(uid, requestCreatedAt, result) {
+         const currentMetadata = await db.metadata.get(uid)
+         if (!currentMetadata || !sameTimestamp(currentMetadata.created_at, requestCreatedAt)) return
+         const [value, meta] = Array.isArray(result) ? result : []
+         if (value?.uid) await db.values.put(value)
+         if (meta?.uid)
+            await db.metadata.put({ ...meta, __dirty__: false })
+         else
+            await db.metadata.update(uid, { __dirty__: false })
+      }
+
+      async function applyUpdateAcknowledgement(uid, requestUpdatedAt, result) {
+         const currentMetadata = await db.metadata.get(uid)
+         if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, requestUpdatedAt)) return
+         const [value, meta] = Array.isArray(result) ? result : []
+         if (value?.uid) await db.values.put(value)
+         if (meta?.uid)
+            await db.metadata.put({ ...meta, __dirty__: false })
+         else
+            await db.metadata.update(uid, { __dirty__: false })
+      }
+
+      async function applyDeleteAcknowledgement(uid, requestDeletedAt, result) {
+         const currentMetadata = await db.metadata.get(uid)
+         if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
+         const [, meta] = Array.isArray(result) ? result : []
+         if (meta?.uid)
+            await db.metadata.put({ ...meta, __dirty__: false })
+         else
+            await db.metadata.update(uid, { __dirty__: false })
       }
 
       const update = async (uid: string, data: object) => {
@@ -263,12 +290,7 @@ export function offlinePlugin(app) {
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
             app.service(modelName).updateWithMeta(uid, data, now)
-            .then(async result => {
-               const [value, meta] = Array.isArray(result) ? result : []
-               if (value?.uid) await db.values.put(value)
-               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
-               else await db.metadata.update(uid, { __dirty__: false })
-            })
+            .then(result => applyUpdateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} update`, err)
                // rollback
@@ -295,11 +317,7 @@ export function offlinePlugin(app) {
          // and in database, if connected
          if (app.isConnected) {
             app.service(modelName).deleteWithMeta(uid, deleted_at)
-            .then(async result => {
-               const [, meta] = Array.isArray(result) ? result : []
-               if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false })
-               else await db.metadata.update(uid, { __dirty__: false })
-            })
+            .then(result => applyDeleteAcknowledgement(uid, deleted_at, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} remove`, err)
                // rollback
@@ -640,6 +658,11 @@ function stringifyWithSortedKeys(obj, space = null) {
    }, space); // 'space' is optional for pretty-printing (e.g., 2 or 4)
 }
 // console.log('stringifyWithSortedKeys({ age: 30, name: "Alice", data: { city: "Paris", color: "red" }})', stringifyWithSortedKeys({ age: 30, name: "Alice", data: { city: "Paris", color: "red" } }))
+
+function sameTimestamp(a, b) {
+   if (!a || !b) return a === b
+   return new Date(a).getTime() === new Date(b).getTime()
+}
 
 export class Mutex {
    constructor() {

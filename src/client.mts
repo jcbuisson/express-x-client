@@ -333,6 +333,8 @@ export function offlinePlugin(app) {
             .then(result => applyDeleteAcknowledgement(uid, deleted_at, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} remove`, err)
+               const currentMetadata = await db.metadata.get(uid)
+               if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, deleted_at)) return
                // rollback
                await db.values.update(uid, { __deleted__: null })
                await db.metadata.update(uid, { deleted_at: null, __dirty__: false })

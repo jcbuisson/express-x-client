@@ -265,6 +265,11 @@ export function offlinePlugin(app) {
          const currentMetadata = await db.metadata.get(uid)
          if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
          const [value, meta] = Array.isArray(result) ? result : []
+         if (!value?.uid && meta?.deleted_at) {
+            await db.values.delete(uid)
+            await db.metadata.delete(uid)
+            return
+         }
          if (value?.uid) await db.values.put(value)
          if (meta?.uid)
             await db.metadata.put({ ...meta, __dirty__: false })
@@ -576,6 +581,11 @@ export function offlinePlugin(app) {
                const serverMeta = Array.isArray(result) ? result[1] : null
                currentMetadata = await idbMetadata.get(elt.uid)
                if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
+               if (Array.isArray(result) && !result[0]?.uid && serverMeta?.deleted_at) {
+                  await idbValues.delete(elt.uid)
+                  await idbMetadata.delete(elt.uid)
+                  continue
+               }
                if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
                else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {

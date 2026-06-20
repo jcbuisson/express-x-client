@@ -319,18 +319,21 @@ export function offlinePlugin(app) {
       }
 
       async function applyDeleteAcknowledgement(uid, requestDeletedAt, result) {
-         const currentMetadata = await db.metadata.get(uid)
-         if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
-         const [value, meta] = Array.isArray(result) ? result : []
-         if (value?.uid && !meta?.deleted_at) {
-            const restoredValue = { ...value }
-            delete restoredValue.__deleted__
-            await db.values.put(restoredValue)
-         }
-         if (meta?.uid)
-            await db.metadata.put({ ...meta, __dirty__: false })
-         else
-            await db.metadata.update(uid, { __dirty__: false })
+         await db.transaction('rw', [db.values, db.metadata], async () => {
+            const currentMetadata = await db.metadata.get(uid)
+            if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
+            const [value, meta] = Array.isArray(result) ? result : []
+            if (meta?.uid && compareMetadataTime(currentMetadata, meta) > 0) return
+            if (value?.uid && !meta?.deleted_at) {
+               const restoredValue = { ...value }
+               delete restoredValue.__deleted__
+               await db.values.put(restoredValue)
+            }
+            if (meta?.uid)
+               await db.metadata.put({ ...meta, __dirty__: false })
+            else
+               await db.metadata.update(uid, { __dirty__: false })
+         })
       }
 
       const update = async (uid: string, data: object) => {

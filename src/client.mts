@@ -251,6 +251,8 @@ export function offlinePlugin(app) {
             .then(result => applyCreateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} create`, err)
+               const currentMetadata = await db.metadata.get(uid)
+               if (!isCreateRequestStillCurrent(currentMetadata, now)) return
                // rollback
                await db.values.delete(uid)
                await db.metadata.delete(uid)
@@ -261,13 +263,20 @@ export function offlinePlugin(app) {
 
       async function applyCreateAcknowledgement(uid, requestCreatedAt, result) {
          const currentMetadata = await db.metadata.get(uid)
-         if (!currentMetadata || !sameTimestamp(currentMetadata.created_at, requestCreatedAt)) return
+         if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
          const [value, meta] = Array.isArray(result) ? result : []
          if (value?.uid) await db.values.put(value)
          if (meta?.uid)
             await db.metadata.put({ ...meta, __dirty__: false })
          else
             await db.metadata.update(uid, { __dirty__: false })
+      }
+
+      function isCreateRequestStillCurrent(currentMetadata, requestCreatedAt) {
+         return currentMetadata
+            && sameTimestamp(currentMetadata.created_at, requestCreatedAt)
+            && !currentMetadata.updated_at
+            && !currentMetadata.deleted_at
       }
 
       async function applyUpdateAcknowledgement(uid, requestUpdatedAt, result) {

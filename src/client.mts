@@ -179,6 +179,7 @@ export async function reloadPlugin(app) {
 export function offlinePlugin(app) {
 
    const modelSyncFunctions = []
+   const syncScopeRefCounts = new Map()
 
    function createOfflineModel(modelName, fields) {
 
@@ -186,6 +187,7 @@ export function offlinePlugin(app) {
       const db = getOrCreateDB(dbName, fields);
       const synchronizedWhereKeys = new Set();
       const synchronizeWherePromises = new Map();
+      const ownedWhereCounts = new Map();
 
       const reset = async () => {
          console.log('reset', modelName);
@@ -434,6 +436,10 @@ export function offlinePlugin(app) {
       let count = 0;
       
       function addSynchroWhere(where: object) {
+         const whereKey = stringifyWithSortedKeys(where)
+         ownedWhereCounts.set(whereKey, (ownedWhereCounts.get(whereKey) ?? 0) + 1)
+         const refKey = syncScopeRefKey(dbName, whereKey)
+         syncScopeRefCounts.set(refKey, (syncScopeRefCounts.get(refKey) ?? 0) + 1)
          const promise = addSynchroDBWhere(where, db.whereList)
          promise.then(isNew => isNew && console.log(`addSynchroWhere (${++count})`, dbName, modelName, where))
          return promise
@@ -441,8 +447,24 @@ export function offlinePlugin(app) {
 
       function removeSynchroWhere(where: object) {
          console.log('removeSynchroWhere', dbName, modelName, where)
+         const whereKey = stringifyWithSortedKeys(where)
+         const ownedCount = ownedWhereCounts.get(whereKey) ?? 0
+         if (ownedCount > 1) {
+            ownedWhereCounts.set(whereKey, ownedCount - 1)
+         } else {
+            ownedWhereCounts.delete(whereKey)
+            synchronizedWhereKeys.delete(whereKey)
+         }
+
+         const refKey = syncScopeRefKey(dbName, whereKey)
+         const nextRefCount = (syncScopeRefCounts.get(refKey) ?? 1) - 1
+         if (nextRefCount > 0) {
+            syncScopeRefCounts.set(refKey, nextRefCount)
+            return Promise.resolve(false)
+         }
+
+         syncScopeRefCounts.delete(refKey)
          count -= 1
-         synchronizedWhereKeys.delete(stringifyWithSortedKeys(where))
          return removeSynchroDBWhere(where, db.whereList)
       }
 
@@ -468,9 +490,12 @@ export function offlinePlugin(app) {
       // Automatically clean up when the component using this composable unmounts
       tryOnScopeDispose(async () => {
          console.log('CLEANING', dbName, modelName)
-         const whereList = await db.whereList.toArray()
-         for (const where of whereList) {
-            removeSynchroWhere(JSON.parse(where.sortedjson))
+         const ownedWhereEntries = [...ownedWhereCounts.entries()]
+         for (const [whereKey, ownedCount] of ownedWhereEntries) {
+            const where = JSON.parse(whereKey)
+            for (let i = 0; i < ownedCount; i++) {
+               await removeSynchroWhere(where)
+            }
          }
       })
 
@@ -779,6 +804,10 @@ function compareMetadataTime(a, b) {
    const bTime = metadataTime(b)
    if (aTime == null || bTime == null) return 0
    return aTime - bTime
+}
+
+function syncScopeRefKey(dbName, whereKey) {
+   return `${dbName}\0${whereKey}`
 }
 
 function metadataTime(meta) {

@@ -1,6 +1,6 @@
 {
   "name": "@jcbuisson/express-x-client",
-  "version": "3.1.19",
+  "version": "3.1.20",
   "type": "module",
   "description": "Client library for ExpressX framework",
   "main": "src/client.mts",

@@ -558,6 +558,8 @@ export function offlinePlugin(app) {
             // get() call: idbValues.get(undefined) itself throws before fullValue is
             // assigned, so checking fullValue == null afterwards is too late.
             if (elt.uid == null) continue
+            let currentMetadata = await idbMetadata.get(elt.uid)
+            if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
             const fullValue = await idbValues.get(elt.uid)
             if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
@@ -565,10 +567,14 @@ export function offlinePlugin(app) {
             try {
                const result = await app.service(modelName).createWithMeta(elt.uid, fullValue, elt.created_at)
                const serverMeta = Array.isArray(result) ? result[1] : null
+               currentMetadata = await idbMetadata.get(elt.uid)
+               if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
                if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
                else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {
                console.log("*** err sync user addDatabase", err, elt.uid, fullValue, elt.created_at)
+               currentMetadata = await idbMetadata.get(elt.uid)
+               if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
                // rollback
                await idbValues.delete(elt.uid)
                await idbMetadata.delete(elt.uid)
@@ -578,6 +584,8 @@ export function offlinePlugin(app) {
          // 5- update elements of `updateDatabase` with full data from cache
          for (const elt of updateDatabase) {
             if (elt.uid == null) continue
+            let currentMetadata = await idbMetadata.get(elt.uid)
+            if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
             const fullValue = await idbValues.get(elt.uid)
             if (fullValue == null) continue  // record deleted concurrently
             delete fullValue.uid
@@ -585,6 +593,8 @@ export function offlinePlugin(app) {
             try {
                const result = await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
                const serverMeta = Array.isArray(result) ? result[1] : null
+               currentMetadata = await idbMetadata.get(elt.uid)
+               if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
                if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
                else await idbMetadata.update(elt.uid, { __dirty__: false })
             } catch(err) {

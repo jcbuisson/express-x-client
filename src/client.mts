@@ -199,14 +199,16 @@ export function offlinePlugin(app) {
 
       app.service(modelName).on('createWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT createWithMeta`, value);
-         if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
-         if (!value?.uid && meta?.deleted_at) {
-            await db.values.delete(meta.uid)
-            await db.metadata.delete(meta.uid)
-            return
-         }
-         if (value?.uid) await db.values.put(value);
-         if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
+         await db.transaction('rw', [db.values, db.metadata], async () => {
+            if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
+            if (!value?.uid && meta?.deleted_at) {
+               await db.values.delete(meta.uid)
+               await db.metadata.delete(meta.uid)
+               return
+            }
+            if (value?.uid) await db.values.put(value);
+            if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
+         })
       });
 
       app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
@@ -215,14 +217,16 @@ export function offlinePlugin(app) {
          // (concurrent delete race: record was removed between the sync's findMany
          // snapshot and the actual update). Guard to avoid a TypeError crash that
          // would prevent db.metadata.put(meta) from running.
-         if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
-         if (!value?.uid && meta?.deleted_at) {
-            await db.values.delete(meta.uid)
-            await db.metadata.delete(meta.uid)
-            return
-         }
-         if (value?.uid) await db.values.put(value);
-         if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
+         await db.transaction('rw', [db.values, db.metadata], async () => {
+            if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
+            if (!value?.uid && meta?.deleted_at) {
+               await db.values.delete(meta.uid)
+               await db.metadata.delete(meta.uid)
+               return
+            }
+            if (value?.uid) await db.values.put(value);
+            if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
+         })
       });
 
       app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
@@ -272,19 +276,21 @@ export function offlinePlugin(app) {
       }
 
       async function applyCreateAcknowledgement(uid, requestCreatedAt, result) {
-         const currentMetadata = await db.metadata.get(uid)
-         if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
-         const [value, meta] = Array.isArray(result) ? result : []
-         if (!value?.uid && meta?.deleted_at) {
-            await db.values.delete(uid)
-            await db.metadata.delete(uid)
-            return
-         }
-         if (value?.uid) await db.values.put(value)
-         if (meta?.uid)
-            await db.metadata.put({ ...meta, __dirty__: false })
-         else
-            await db.metadata.update(uid, { __dirty__: false })
+         await db.transaction('rw', [db.values, db.metadata], async () => {
+            const currentMetadata = await db.metadata.get(uid)
+            if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
+            const [value, meta] = Array.isArray(result) ? result : []
+            if (!value?.uid && meta?.deleted_at) {
+               await db.values.delete(uid)
+               await db.metadata.delete(uid)
+               return
+            }
+            if (value?.uid) await db.values.put(value)
+            if (meta?.uid)
+               await db.metadata.put({ ...meta, __dirty__: false })
+            else
+               await db.metadata.update(uid, { __dirty__: false })
+         })
       }
 
       function isCreateRequestStillCurrent(currentMetadata, requestCreatedAt) {
@@ -295,19 +301,21 @@ export function offlinePlugin(app) {
       }
 
       async function applyUpdateAcknowledgement(uid, requestUpdatedAt, result) {
-         const currentMetadata = await db.metadata.get(uid)
-         if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, requestUpdatedAt)) return
-         const [value, meta] = Array.isArray(result) ? result : []
-         if (!value?.uid && meta?.deleted_at) {
-            await db.values.delete(uid)
-            await db.metadata.delete(uid)
-            return
-         }
-         if (value?.uid) await db.values.put(value)
-         if (meta?.uid)
-            await db.metadata.put({ ...meta, __dirty__: false })
-         else
-            await db.metadata.update(uid, { __dirty__: false })
+         await db.transaction('rw', [db.values, db.metadata], async () => {
+            const currentMetadata = await db.metadata.get(uid)
+            if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, requestUpdatedAt)) return
+            const [value, meta] = Array.isArray(result) ? result : []
+            if (!value?.uid && meta?.deleted_at) {
+               await db.values.delete(uid)
+               await db.metadata.delete(uid)
+               return
+            }
+            if (value?.uid) await db.values.put(value)
+            if (meta?.uid)
+               await db.metadata.put({ ...meta, __dirty__: false })
+            else
+               await db.metadata.update(uid, { __dirty__: false })
+         })
       }
 
       async function applyDeleteAcknowledgement(uid, requestDeletedAt, result) {
@@ -560,11 +568,13 @@ export function offlinePlugin(app) {
          // 2- delete elements from indexedDB cache
          if (deleteClient.length > 0) {
             await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
-               for (const [uid] of deleteClient) {
+               for (const [uid, deletedAt] of deleteClient) {
                   const currentMetadata = await idbMetadata.get(uid)
-                  if (!metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[uid])) continue
+                  const unchanged = metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[uid])
+                  if (!unchanged && compareMetadataTime(currentMetadata, { uid, deleted_at: deletedAt }) > 0) continue
                   await idbValues.delete(uid)
-                  await idbMetadata.delete(uid)
+                  if (unchanged) await idbMetadata.delete(uid)
+                  else await idbMetadata.put({ uid, deleted_at: deletedAt, __dirty__: false })
                }
             })
          }

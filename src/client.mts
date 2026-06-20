@@ -293,7 +293,12 @@ export function offlinePlugin(app) {
       async function applyDeleteAcknowledgement(uid, requestDeletedAt, result) {
          const currentMetadata = await db.metadata.get(uid)
          if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
-         const [, meta] = Array.isArray(result) ? result : []
+         const [value, meta] = Array.isArray(result) ? result : []
+         if (value?.uid && !meta?.deleted_at) {
+            const restoredValue = { ...value }
+            delete restoredValue.__deleted__
+            await db.values.put(restoredValue)
+         }
          if (meta?.uid)
             await db.metadata.put({ ...meta, __dirty__: false })
          else

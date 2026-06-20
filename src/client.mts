@@ -559,7 +559,9 @@ export function offlinePlugin(app) {
                   // add() would throw ConstraintError and abort the entire transaction,
                   // silently dropping every other addClient record in the batch.
                   const currentMetadata = await idbMetadata.get(value.uid)
-                  if (currentMetadata && compareMetadataTime(metaData, currentMetadata) <= 0) continue
+                  if (currentMetadata
+                     && compareMetadataTime(metaData, currentMetadata) <= 0
+                     && !(currentMetadata.deleted_at && !metaData.deleted_at)) continue
                   await idbValues.put(value)
                   await idbMetadata.put({ ...metaData, __dirty__: false })
                }

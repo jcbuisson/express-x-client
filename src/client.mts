@@ -525,6 +525,8 @@ export function offlinePlugin(app) {
                   // uid to Dexie between the idbValues.filter snapshot and this step,
                   // add() would throw ConstraintError and abort the entire transaction,
                   // silently dropping every other addClient record in the batch.
+                  const currentMetadata = await idbMetadata.get(value.uid)
+                  if (currentMetadata && compareMetadataTime(metaData, currentMetadata) <= 0) continue
                   await idbValues.put(value)
                   await idbMetadata.put({ ...metaData, __dirty__: false })
                }

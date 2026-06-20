@@ -199,8 +199,9 @@ export function offlinePlugin(app) {
 
       app.service(modelName).on('createWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT createWithMeta`, value);
-         await db.values.put(value);
-         await db.metadata.put(meta);
+         if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
+         if (value?.uid) await db.values.put(value);
+         if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
       });
 
       app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
@@ -209,20 +210,30 @@ export function offlinePlugin(app) {
          // (concurrent delete race: record was removed between the sync's findMany
          // snapshot and the actual update). Guard to avoid a TypeError crash that
          // would prevent db.metadata.put(meta) from running.
+         if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
          if (value?.uid) await db.values.put(value);
-         await db.metadata.put(meta);
+         if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
       });
 
       app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT deleteWithMeta`, value)
          // value may be undefined when the server's delete yielded 0 rows
          // (double-delete race).
-         if (value?.uid) await db.values.delete(value.uid)
          // delete, not put: synchronize() step 2 also deletes idbMetadata for the same
          // uid. If the pub/sub handler fires AFTER step 2, put() would re-create the
          // metadata row as a permanent orphan. delete() is idempotent regardless of order.
-         await db.metadata.delete(meta.uid)
+         const uid = value?.uid ?? meta?.uid
+         if (await isIncomingEventStale(uid, meta)) return
+         if (value?.uid) await db.values.delete(value.uid)
+         if (uid) await db.metadata.delete(uid)
       });
+
+      async function isIncomingEventStale(uid, incomingMeta) {
+         if (!uid || !incomingMeta) return false
+         const currentMeta = await db.metadata.get(uid)
+         if (!currentMeta) return false
+         return compareMetadataTime(currentMeta, incomingMeta) > 0
+      }
 
 
       /////////////          CREATE/UPDATE/REMOVE          /////////////
@@ -662,6 +673,20 @@ function stringifyWithSortedKeys(obj, space = null) {
 function sameTimestamp(a, b) {
    if (!a || !b) return a === b
    return new Date(a).getTime() === new Date(b).getTime()
+}
+
+function compareMetadataTime(a, b) {
+   const aTime = metadataTime(a)
+   const bTime = metadataTime(b)
+   if (aTime == null || bTime == null) return 0
+   return aTime - bTime
+}
+
+function metadataTime(meta) {
+   const value = meta?.deleted_at ?? meta?.updated_at ?? meta?.created_at
+   if (!value) return null
+   const time = new Date(value).getTime()
+   return Number.isNaN(time) ? null : time
 }
 
 export class Mutex {

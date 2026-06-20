@@ -581,7 +581,8 @@ export function offlinePlugin(app) {
          // 3- update elements of cache with server's newer version
          for (const [elt, serverMeta] of updateClient) {
             const currentMetadata = await idbMetadata.get(elt.uid)
-            if (!metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[elt.uid])) continue
+            if (!metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[elt.uid])
+               && compareMetadataTime(currentMetadata, serverMeta) > 0) continue
             const value = { ...elt }
             delete value.__deleted__
             await idbValues.put(value)

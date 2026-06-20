@@ -373,7 +373,8 @@ export function offlinePlugin(app) {
          const deleted_at = new Date()
          // optimistic delete in cache
          await db.values.update(uid, { __deleted__: true })
-         await db.metadata.update(uid, { deleted_at, __dirty__: true })
+         const previousMetadata = await db.metadata.get(uid)
+         await db.metadata.put({ uid, ...previousMetadata, deleted_at, __dirty__: true })
          // and in database, if connected
          if (app.isConnected) {
             app.service(modelName).deleteWithMeta(uid, deleted_at)

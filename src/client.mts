@@ -570,8 +570,11 @@ export function offlinePlugin(app) {
             if (metadata) {
                clientMetadataDict[value.uid] = metadata
             } else {
-               // should not happen
-               clientMetadataDict[value.uid] = {}
+               // Repair old/corrupt IndexedDB state where a visible value exists
+               // without metadata; otherwise the server receives {} and cannot sync it.
+               const repairedMetadata = { uid: value.uid, created_at: new Date(), __dirty__: true }
+               await idbMetadata.put(repairedMetadata)
+               clientMetadataDict[value.uid] = repairedMetadata
             }
          }
          const dirtyMetadataList = await idbMetadata.filter(metadata => metadata.__dirty__).toArray()

@@ -307,7 +307,7 @@ export function offlinePlugin(app) {
             const currentMetadata = await db.metadata.get(uid)
             if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, requestUpdatedAt)) return
             const [value, meta] = Array.isArray(result) ? result : []
-            if (!value?.uid && meta?.deleted_at) {
+            if (meta?.deleted_at) {
                await db.values.delete(uid)
                await db.metadata.delete(uid)
                return
@@ -326,7 +326,7 @@ export function offlinePlugin(app) {
             if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
             const [value, meta] = Array.isArray(result) ? result : []
             if (meta?.uid && compareMetadataTime(currentMetadata, meta) > 0) return
-            if (!value?.uid && meta?.deleted_at) {
+            if (meta?.deleted_at && !sameTimestamp(meta.deleted_at, requestDeletedAt)) {
                await db.values.delete(uid)
                await db.metadata.delete(uid)
                return
@@ -652,7 +652,7 @@ export function offlinePlugin(app) {
                const serverMeta = Array.isArray(result) ? result[1] : null
                currentMetadata = await idbMetadata.get(elt.uid)
                if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
-               if (Array.isArray(result) && !result[0]?.uid && serverMeta?.deleted_at) {
+               if (Array.isArray(result) && serverMeta?.deleted_at) {
                   await idbValues.delete(elt.uid)
                   await idbMetadata.delete(elt.uid)
                   continue
@@ -688,7 +688,7 @@ export function offlinePlugin(app) {
                const serverMeta = Array.isArray(result) ? result[1] : null
                currentMetadata = await idbMetadata.get(elt.uid)
                if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
-               if (Array.isArray(result) && !result[0]?.uid && serverMeta?.deleted_at) {
+               if (Array.isArray(result) && serverMeta?.deleted_at) {
                   await idbValues.delete(elt.uid)
                   await idbMetadata.delete(elt.uid)
                   continue

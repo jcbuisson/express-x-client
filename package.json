@@ -1,16 +1,33 @@
 {
   "name": "@jcbuisson/express-x-client",
-  "version": "3.1.30",
+  "version": "3.1.31",
   "type": "module",
   "description": "Client library for ExpressX framework",
   "main": "src/client.mts",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">= 14.0.0",
+    "npm": ">= 6.0.0"
+  },
+  "homepage": "",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/jcbuisson/express-x-drizzle.git"
+  },
+  "author": "Jean-Christophe Buisson <buisson@enseeiht.fr> (jcbuisson.dev)",
+  "license": "MIT",
   "test": "node --test",
   "scripts": {
     "test": "echo all tests are in @jcbuisson/express-x"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
+    "@vueuse/core": "^14.3.0",
+    "dexie": "^4.4.4",
+    "rxjs": "^7.8.2",
+    "uuid": "^14.0.1"
   }
 }

@@ -326,6 +326,11 @@ export function offlinePlugin(app) {
             if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
             const [value, meta] = Array.isArray(result) ? result : []
             if (meta?.uid && compareMetadataTime(currentMetadata, meta) > 0) return
+            if (!value?.uid && meta?.deleted_at) {
+               await db.values.delete(uid)
+               await db.metadata.delete(uid)
+               return
+            }
             if (value?.uid && !meta?.deleted_at) {
                const restoredValue = { ...value }
                delete restoredValue.__deleted__

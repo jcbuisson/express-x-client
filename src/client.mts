@@ -581,7 +581,11 @@ export function offlinePlugin(app) {
          for (const metadata of dirtyMetadataList) {
             if (metadata.uid in clientMetadataDict) continue
             const value = await idbValues.get(metadata.uid)
-            if (value || metadata.deleted_at) clientMetadataDict[metadata.uid] = metadata
+            if (value) {
+               if (!metadata.deleted_at || requestPredicate(value)) clientMetadataDict[metadata.uid] = metadata
+            } else if (metadata.deleted_at && Object.keys(where).length === 0) {
+               clientMetadataDict[metadata.uid] = metadata
+            }
          }
 
          // call sync service on `where` perimeter

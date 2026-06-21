@@ -876,10 +876,10 @@ function wherePredicate(where) {
             // undefined coerces to NaN and all NaN comparisons return false — both
             // must be excluded explicitly.
             if (eltAttrValue === undefined || eltAttrValue === null) return false
-            if ('lte' in value && eltAttrValue > value.lte) return false
-            if ('lt'  in value && eltAttrValue >= value.lt)  return false
-            if ('gte' in value && eltAttrValue < value.gte)  return false
-            if ('gt'  in value && eltAttrValue <= value.gt)  return false
+            if ('lte' in value && compareWhereValues(eltAttrValue, value.lte) > 0) return false
+            if ('lt'  in value && compareWhereValues(eltAttrValue, value.lt) >= 0)  return false
+            if ('gte' in value && compareWhereValues(eltAttrValue, value.gte) < 0)  return false
+            if ('gt'  in value && compareWhereValues(eltAttrValue, value.gt) <= 0)  return false
          } else if (!sameWhereValue(eltAttrValue, value)) {
             return false
          }
@@ -906,6 +906,16 @@ function sameWhereValue(a, b) {
       return stringifyWithSortedKeys(a) === stringifyWithSortedKeys(b)
    }
    return a === b
+}
+
+function compareWhereValues(a, b) {
+   if (a instanceof Date || b instanceof Date) {
+      const aTime = new Date(a).getTime()
+      const bTime = new Date(b).getTime()
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) return aTime - bTime
+   }
+   if (a === b) return 0
+   return a > b ? 1 : -1
 }
 
 function isSubset(subset, fullObject) {

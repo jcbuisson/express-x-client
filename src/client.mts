@@ -862,13 +862,13 @@ function wherePredicate(where) {
 
          if (typeof(value) === 'string' || typeof(value) === 'number' || typeof(value) === 'boolean') {
             // 'attr = value' clause
-            if (eltAttrValue !== value) return false
+            if (!sameWhereValue(eltAttrValue, value)) return false
 
          } else if (value === null) {
             // 'attr = null' clause
             if (eltAttrValue !== null) return false
 
-         } else if (typeof(value) === 'object') {
+         } else if (hasRangeOperator(value)) {
             // 'attr = { lt/lte/gt/gte: value }' clause — all bounds apply.
             // A missing (undefined) or null field never satisfies a range constraint,
             // consistent with SQL NULL behaviour (NULL op anything = NULL = unknown).
@@ -880,10 +880,32 @@ function wherePredicate(where) {
             if ('lt'  in value && eltAttrValue >= value.lt)  return false
             if ('gte' in value && eltAttrValue < value.gte)  return false
             if ('gt'  in value && eltAttrValue <= value.gt)  return false
+         } else if (!sameWhereValue(eltAttrValue, value)) {
+            return false
          }
       }
       return true
    }
+}
+
+function hasRangeOperator(value) {
+   return value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.prototype.toString.call(value) === '[object Object]'
+      && ['gte', 'gt', 'lte', 'lt'].some(key => key in value)
+}
+
+function sameWhereValue(a, b) {
+   if (a instanceof Date || b instanceof Date) {
+      const aTime = new Date(a).getTime()
+      const bTime = new Date(b).getTime()
+      return !Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime === bTime
+   }
+   if (a && b && typeof a === 'object' && typeof b === 'object') {
+      return stringifyWithSortedKeys(a) === stringifyWithSortedKeys(b)
+   }
+   return a === b
 }
 
 function isSubset(subset, fullObject) {

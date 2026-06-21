@@ -381,6 +381,8 @@ export function offlinePlugin(app) {
       }
 
       const remove = async (uid: string) => {
+         const existingValue = await db.values.get(uid)
+         if (!existingValue) return undefined
          const deleted_at = new Date()
          // optimistic delete in cache
          await db.values.update(uid, { __deleted__: true })

@@ -344,7 +344,9 @@ export function offlinePlugin(app) {
       }
 
       const update = async (uid: string, data: object) => {
-         const previousValue = { ...(await db.values.get(uid)) }
+         const existingValue = await db.values.get(uid)
+         if (!existingValue) return undefined
+         const previousValue = { ...existingValue }
          const previousMetadata = { ...(await db.metadata.get(uid)) }
          // optimistic update of cache
          const now = new Date()

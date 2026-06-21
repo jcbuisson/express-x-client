@@ -344,7 +344,7 @@ export function offlinePlugin(app) {
          // optimistic update of cache
          const now = new Date()
          await db.values.update(uid, data)
-         await db.metadata.update(uid, { updated_at: now, __dirty__: true })
+         await db.metadata.put({ uid, ...previousMetadata, updated_at: now, __dirty__: true })
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
             app.service(modelName).updateWithMeta(uid, data, now)
@@ -354,16 +354,20 @@ export function offlinePlugin(app) {
                const currentMetadata = await db.metadata.get(uid)
                if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, now)) return
                // rollback
+               const currentValue = await db.values.get(uid)
+               const currentDeletedAt = currentMetadata.deleted_at ?? (currentValue?.__deleted__ ? new Date() : null)
                delete previousValue.uid
                await db.values.update(uid, previousValue)
                // Only restore updated_at — the optimistic write only touched that field.
                // Restoring the full previousMetadata snapshot would overwrite any
                // deleted_at that remove() set while the socket round-trip was in flight,
                // silently un-deleting the record.
-               await db.metadata.update(uid, {
+               const rollbackMetadata = {
                   updated_at: previousMetadata.updated_at ?? null,
-                  __dirty__: previousMetadata.__dirty__ ?? false,
-               })
+                  __dirty__: currentDeletedAt ? currentMetadata.__dirty__ : (previousMetadata.__dirty__ ?? false),
+               }
+               if (currentDeletedAt) rollbackMetadata.deleted_at = currentDeletedAt
+               await db.metadata.update(uid, rollbackMetadata)
             })
          }
          return await db.values.get(uid)

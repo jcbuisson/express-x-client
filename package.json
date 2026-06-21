@@ -6,6 +6,7 @@
   "main": "src/client.mts",
   "test": "node --test",
   "scripts": {
+    "test": "echo all tests are in @jcbuisson/express-x"
   },
   "keywords": [],
   "author": "",

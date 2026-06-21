@@ -203,7 +203,7 @@ export function offlinePlugin(app) {
          console.log(`${modelName} EVENT createWithMeta`, value);
          await db.transaction('rw', [db.values, db.metadata], async () => {
             if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
-            if (!value?.uid && meta?.deleted_at) {
+            if (meta?.deleted_at) {
                await db.values.delete(meta.uid)
                await db.metadata.delete(meta.uid)
                return
@@ -221,7 +221,7 @@ export function offlinePlugin(app) {
          // would prevent db.metadata.put(meta) from running.
          await db.transaction('rw', [db.values, db.metadata], async () => {
             if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
-            if (!value?.uid && meta?.deleted_at) {
+            if (meta?.deleted_at) {
                await db.values.delete(meta.uid)
                await db.metadata.delete(meta.uid)
                return
@@ -282,7 +282,7 @@ export function offlinePlugin(app) {
             const currentMetadata = await db.metadata.get(uid)
             if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
             const [value, meta] = Array.isArray(result) ? result : []
-            if (!value?.uid && meta?.deleted_at) {
+            if (meta?.deleted_at) {
                await db.values.delete(uid)
                await db.metadata.delete(uid)
                return

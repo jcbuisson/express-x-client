@@ -645,6 +645,7 @@ export function offlinePlugin(app) {
             if (!metadataUnchangedSinceRequest(currentMetadata, elt)) continue
             const fullValue = await idbValues.get(elt.uid)
             if (fullValue == null) continue  // record deleted concurrently
+            if (!requestPredicate(fullValue)) continue
             delete fullValue.uid
             delete fullValue.__deleted__
             try {

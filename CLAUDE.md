@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`@jcbuisson/express-x-client` is the browser-side client library for the ExpressX framework. It wraps a socket.io socket and provides service proxies, pub/sub, and optional offline-first sync. The entire library lives in a single file: `src/client.mts`.
+`@jcbuisson/express-x-client` is the browser-side client library for the ExpressX framework. It wraps a socket.io socket and provides service proxies, pub/sub, and optional offline-first sync. The entire library lives in a single file: `src/client.js`.
 
-The package is ESM-only (`"type": "module"`). The `main` field in `package.json` points directly to `src/client.mts` — there is no compilation or build step. No build, lint, or test scripts are defined.
+The package is ESM-only (`"type": "module"`). The `main` field in `package.json` points directly to `src/client.js` — there is no compilation or build step.
 
-The file uses TypeScript syntax (type annotations) despite the absence of a `tsconfig.json`.
+The file is plain JavaScript ESM so it can be consumed directly as the package entry point.
 
 ## Architecture
 
@@ -68,4 +68,4 @@ Used throughout for querying local cache and scoping server sync:
 ## Notes
 - `uuidv7` is used for client-side record IDs (monotonically increasing, good for B-tree indexes).
 - The `prisma/` directory with a SQLite schema is an unrelated artifact and not part of the library.
-- All imported packages (`dexie`, `rxjs`, `uuid`, `@vueuse/core`) are consumed by the library but are not listed as `dependencies` — they are expected to be provided by the consuming application.
+- Imported packages (`dexie`, `rxjs`, `uuid`, `@vueuse/core`) are runtime dependencies listed in `package.json`.

@@ -13,8 +13,8 @@ import { useSessionStorage } from '@vueuse/core'
 export function createClient(socket, options={}) {
    if (options.debug === undefined) options.debug = false
 
-   const action2service2handlers = {}
-   const type2appHandler = {}
+   const action2service2handlers = new Map()
+   const type2appHandler = new Map()
    let connectListeners = []
    let disconnectListeners = []
    let errorListeners = []
@@ -70,12 +70,17 @@ export function createClient(socket, options={}) {
    }
 
    // on receiving service events from pub/sub
-   socket.on('service-event', ({ name, action, result }) => {
+   socket.on('service-event', (event) => {
+      if (!event || typeof event !== 'object'
+         || typeof event.name !== 'string'
+         || typeof event.action !== 'string') return
+      const { name, action, result } = event
       if (options.debug) console.log('service-event', name, action, result)
-      if (!action2service2handlers[action]) action2service2handlers[action] = {}
-      const serviceHandlers = action2service2handlers[action]
-      const handler = serviceHandlers[name]
-      if (handler) Promise.resolve(handler(result)).catch(err => console.error('service-event handler error', name, action, err))
+      const handlers = action2service2handlers.get(action)?.get(name)
+      if (!handlers) return
+      for (const handler of handlers) {
+         Promise.resolve(handler(result)).catch(err => console.error('service-event handler error', name, action, err))
+      }
    })
    
    async function serviceMethodRequest(name, action, serviceOptions, ...args) {
@@ -94,15 +99,25 @@ export function createClient(socket, options={}) {
       const service = {
          // associate a handler to a pub/sub event for this service
          on: (action, handler) => {
-            if (!action2service2handlers[action]) action2service2handlers[action] = {}
-            const serviceHandlers = action2service2handlers[action]
-            serviceHandlers[name] = handler
+            if (!action2service2handlers.has(action)) action2service2handlers.set(action, new Map())
+            const serviceHandlers = action2service2handlers.get(action)
+            if (!serviceHandlers.has(name)) serviceHandlers.set(name, new Set())
+            const handlers = serviceHandlers.get(name)
+            handlers.add(handler)
+            return () => {
+               handlers.delete(handler)
+               if (handlers.size === 0) serviceHandlers.delete(name)
+               if (serviceHandlers.size === 0) action2service2handlers.delete(action)
+            }
          },
+         call: (action, ...args) => serviceMethodRequest(name, action, serviceOptions, ...args),
       }
       // use a Proxy to allow for any method name for a service
       const handler = {
          get(service, action) {
-            if (!(action in service)) {
+            if (action === 'then') return undefined
+            if (typeof action !== 'string') return Reflect.get(service, action)
+            if (!Object.hasOwn(service, action)) {
                // newly used property `action`: define it as a service method request function
                service[action] = (...args) => serviceMethodRequest(name, action, serviceOptions, ...args)
             }
@@ -116,15 +131,17 @@ export function createClient(socket, options={}) {
 
    // There is a need for application-wide events sent outside any service method call, for example when backend state changes
    // without front-end interactions
-   socket.on('app-event', ({ type, value }) => {
+   socket.on('app-event', (event) => {
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') return
+      const { type, value } = event
       if (options.debug) console.log('app-event', type, value)
-      const handler = type2appHandler[type]
+      const handler = type2appHandler.get(type)
       if (typeof handler === 'function') handler(value)
    })
 
    // add a handler for application-wide events
    function on(type, handler) {
-      type2appHandler[type] = handler
+      type2appHandler.set(type, handler)
    }
 
    const app = {
@@ -150,12 +167,17 @@ export function createClient(socket, options={}) {
 export async function reloadPlugin(app) {
 
    const cnxid = useSessionStorage('cnxid', '')
+   const cnxtoken = useSessionStorage('cnxtoken', '')
 
    app.addConnectListener(async (socket) => {
       const socketId = socket.id
       console.log('connect', socketId)
       const prevSocketId = cnxid.value
-      if (prevSocketId) {
+      const prevTransferToken = cnxtoken.value
+      socket.on('cnx-transfer-token', token => {
+         if (typeof token === 'string') cnxtoken.value = token
+      })
+      if (prevSocketId && prevTransferToken) {
          console.log('cnx-transfer', prevSocketId, 'to', socketId)
          socket.once('cnx-transfer-ack', async (fromSocketId, toSocketId) => {
             console.log('ACK ACK!!!', fromSocketId, toSocketId)
@@ -165,7 +187,7 @@ export async function reloadPlugin(app) {
             console.log('ERR ERR!!!', fromSocketId, toSocketId)
             cnxid.value = socketId
          })
-         socket.emit('cnx-transfer', prevSocketId, socketId)
+         socket.emit('cnx-transfer', prevSocketId, socketId, prevTransferToken)
       } else {
          cnxid.value = socketId
       }
@@ -178,7 +200,7 @@ export async function reloadPlugin(app) {
 
 export function offlinePlugin(app) {
 
-   const modelSyncFunctions = []
+   const modelSyncFunctions = new Set()
    const syncScopeRefCounts = new Map()
 
    function createOfflineModel(modelName, fields) {
@@ -201,8 +223,9 @@ export function offlinePlugin(app) {
 
       /////////////          PUB / SUB          /////////////
 
-      app.service(modelName).on('createWithMeta', async ([value, meta]) => {
+      const removeCreateListener = app.service(modelName).on('createWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT createWithMeta`, value);
+         if (!isValidServiceResultIdentity(value, meta)) return
          await db.transaction('rw', [db.values, db.metadata], async () => {
             if (await isIncomingEventStale(value?.uid ?? meta?.uid, meta)) return
             if (meta?.deleted_at) {
@@ -215,8 +238,9 @@ export function offlinePlugin(app) {
          })
       });
 
-      app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
+      const removeUpdateListener = app.service(modelName).on('updateWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT updateWithMeta`, value);
+         if (!isValidServiceResultIdentity(value, meta)) return
          // value may be undefined when the server's update yielded 0 rows
          // (concurrent delete race: record was removed between the sync's findMany
          // snapshot and the actual update). Guard to avoid a TypeError crash that
@@ -233,8 +257,9 @@ export function offlinePlugin(app) {
          })
       });
 
-      app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
+      const removeDeleteListener = app.service(modelName).on('deleteWithMeta', async ([value, meta]) => {
          console.log(`${modelName} EVENT deleteWithMeta`, value)
+         if (!isValidServiceResultIdentity(value, meta)) return
          // value may be undefined when the server's delete yielded 0 rows
          // (double-delete race).
          // delete, not put: synchronize() step 2 also deletes idbMetadata for the same
@@ -263,13 +288,14 @@ export function offlinePlugin(app) {
          const uid = uuidv7()
          // optimistic update
          const now = new Date()
+         const safeData = sanitizeMutationData(data)
          await db.transaction('rw', [db.values, db.metadata], async () => {
-            await db.values.add({ uid, ...data })
+            await db.values.add({ ...safeData, uid })
             await db.metadata.add({ uid, created_at: now, __dirty__: true })
          })
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
-            app.service(modelName).createWithMeta(uid, data, now)
+            app.service(modelName).createWithMeta(uid, safeData, now)
             .then(result => applyCreateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} create`, err)
@@ -285,20 +311,17 @@ export function offlinePlugin(app) {
       }
 
       async function applyCreateAcknowledgement(uid, requestCreatedAt, result) {
+         const [value, meta] = validateServiceResult(result, uid)
          await db.transaction('rw', [db.values, db.metadata], async () => {
             const currentMetadata = await db.metadata.get(uid)
             if (!isCreateRequestStillCurrent(currentMetadata, requestCreatedAt)) return
-            const [value, meta] = Array.isArray(result) ? result : []
             if (meta?.deleted_at) {
                await db.values.delete(uid)
                await db.metadata.delete(uid)
                return
             }
             if (value?.uid) await db.values.put(value)
-            if (meta?.uid)
-               await db.metadata.put({ ...meta, __dirty__: false })
-            else
-               await db.metadata.update(uid, { __dirty__: false })
+            await db.metadata.put({ ...meta, __dirty__: false })
          })
       }
 
@@ -310,28 +333,25 @@ export function offlinePlugin(app) {
       }
 
       async function applyUpdateAcknowledgement(uid, requestUpdatedAt, result) {
+         const [value, meta] = validateServiceResult(result, uid)
          await db.transaction('rw', [db.values, db.metadata], async () => {
             const currentMetadata = await db.metadata.get(uid)
             if (!currentMetadata || !sameTimestamp(currentMetadata.updated_at, requestUpdatedAt)) return
-            const [value, meta] = Array.isArray(result) ? result : []
             if (meta?.deleted_at) {
                await db.values.delete(uid)
                await db.metadata.delete(uid)
                return
             }
             if (value?.uid) await db.values.put(value)
-            if (meta?.uid)
-               await db.metadata.put({ ...meta, __dirty__: false })
-            else
-               await db.metadata.update(uid, { __dirty__: false })
+            await db.metadata.put({ ...meta, __dirty__: false })
          })
       }
 
       async function applyDeleteAcknowledgement(uid, requestDeletedAt, result) {
+         const [value, meta] = validateServiceResult(result, uid)
          await db.transaction('rw', [db.values, db.metadata], async () => {
             const currentMetadata = await db.metadata.get(uid)
             if (!currentMetadata || !sameTimestamp(currentMetadata.deleted_at, requestDeletedAt)) return
-            const [value, meta] = Array.isArray(result) ? result : []
             if (meta?.uid && compareMetadataTime(currentMetadata, meta) > 0) return
             if (meta?.deleted_at && !sameTimestamp(meta.deleted_at, requestDeletedAt)) {
                await db.values.delete(uid)
@@ -343,14 +363,12 @@ export function offlinePlugin(app) {
                delete restoredValue.__deleted__
                await db.values.put(restoredValue)
             }
-            if (meta?.uid)
-               await db.metadata.put({ ...meta, __dirty__: false })
-            else
-               await db.metadata.update(uid, { __dirty__: false })
+            await db.metadata.put({ ...meta, __dirty__: false })
          })
       }
 
       const update = async (uid, data) => {
+         const safeData = sanitizeMutationData(data)
          let previousValue
          let previousMetadata
          let now
@@ -360,14 +378,14 @@ export function offlinePlugin(app) {
             previousValue = { ...existingValue }
             previousMetadata = { ...(await db.metadata.get(uid)) }
             now = nextMutationTimestamp(previousMetadata)
-            await db.values.update(uid, data)
+            await db.values.update(uid, safeData)
             await db.metadata.put({ uid, ...previousMetadata, updated_at: now, __dirty__: true })
             return true
          })
          if (!updated) return undefined
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
-            app.service(modelName).updateWithMeta(uid, data, now)
+            app.service(modelName).updateWithMeta(uid, safeData, now)
             .then(result => applyUpdateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} update`, err)
@@ -425,8 +443,9 @@ export function offlinePlugin(app) {
 
       /////////////          DIRECT CACHE ACCESS          /////////////
 
-      function findByUID(uid) {
-         return db.values.get(uid)
+      async function findByUID(uid) {
+         const value = await db.values.get(uid)
+         return value?.__deleted__ ? undefined : value
       }
 
       function findWhere(where = {}) {
@@ -527,6 +546,10 @@ export function offlinePlugin(app) {
       // Automatically clean up when the component using this composable unmounts
       tryOnScopeDispose(async () => {
          console.log('CLEANING', dbName, modelName)
+         modelSyncFunctions.delete(synchronizeAll)
+         removeCreateListener()
+         removeUpdateListener()
+         removeDeleteListener()
          const ownedWhereEntries = [...ownedWhereCounts.entries()]
          for (const [whereKey, ownedCount] of ownedWhereEntries) {
             const where = JSON.parse(whereKey)
@@ -536,7 +559,7 @@ export function offlinePlugin(app) {
          }
       })
 
-      modelSyncFunctions.push(synchronizeAll)
+      modelSyncFunctions.add(synchronizeAll)
 
       return {
          db, reset,
@@ -558,7 +581,7 @@ export function offlinePlugin(app) {
       const isInitialConnect = !hasConnected
       hasConnected = true
       if (disconnectedDate || isInitialConnect) {
-         const results = await Promise.allSettled(modelSyncFunctions.map(sync => sync()))
+         const results = await Promise.allSettled([...modelSyncFunctions].map(sync => sync()))
          const failures = results.filter(result => result.status === 'rejected')
          if (failures.length > 0) {
             console.error('err reconnect synchronizeAll', failures.map(result => result.reason))
@@ -589,7 +612,7 @@ export function offlinePlugin(app) {
          // collect meta-data of local values
          // NOTE: __delete__ on values allows to collect metadata from cache-deleted values
          const valueList = await idbValues.filter(requestPredicate).toArray()
-         const clientMetadataDict = {}
+         const clientMetadataDict = Object.create(null)
          for (const value of valueList) {
             const metadata = await idbMetadata.get(value.uid)
             if (metadata) {
@@ -604,7 +627,7 @@ export function offlinePlugin(app) {
          }
          const dirtyMetadataList = await idbMetadata.filter(metadata => metadata.__dirty__).toArray()
          for (const metadata of dirtyMetadataList) {
-            if (metadata.uid in clientMetadataDict) continue
+            if (Object.hasOwn(clientMetadataDict, metadata.uid)) continue
             const value = await idbValues.get(metadata.uid)
             if (value) {
                if (!metadata.deleted_at || requestPredicate(value)) clientMetadataDict[metadata.uid] = metadata
@@ -614,8 +637,10 @@ export function offlinePlugin(app) {
          }
 
          // call sync service on `where` perimeter
-         const { addClient, updateClient, deleteClient, addDatabase, updateDatabase } =
-            await app.service('sync').go(modelName, where, clientMetadataDict)
+         const syncResult = validateSyncResult(
+            await app.service('sync').go(modelName, where, clientMetadataDict),
+         )
+         const { addClient, updateClient, deleteClient, addDatabase, updateDatabase } = syncResult
          console.log('-> service.sync', modelName, where, addClient, updateClient, deleteClient, addDatabase, updateDatabase)
 
          // 1- add missing elements in indexedDB cache
@@ -644,6 +669,10 @@ export function offlinePlugin(app) {
             await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
                for (const [uid, deletedAt] of deleteClient) {
                   const currentMetadata = await idbMetadata.get(uid)
+                  // A deleteWithMeta pub/sub event may already have removed both rows
+                  // while this sync request was in flight. Do not recreate a clean
+                  // tombstone after that successful acknowledgement.
+                  if (!currentMetadata && clientMetadataDict[uid]) continue
                   const unchanged = metadataUnchangedSinceRequest(currentMetadata, clientMetadataDict[uid])
                   if (!unchanged && compareMetadataTime(currentMetadata, { uid, deleted_at: deletedAt }) > 0) continue
                   await idbValues.delete(uid)
@@ -681,22 +710,21 @@ export function offlinePlugin(app) {
             delete fullValue.__deleted__
             try {
                const result = await app.service(modelName).createWithMeta(elt.uid, fullValue, elt.created_at)
-               const serverMeta = Array.isArray(result) ? result[1] : null
+               const [, serverMeta] = validateServiceResult(result, elt.uid)
                await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
                   currentMetadata = await idbMetadata.get(elt.uid)
                   if (!metadataUnchangedSinceRequest(currentMetadata, elt)) return
-                  if (Array.isArray(result) && serverMeta?.deleted_at) {
+                  if (serverMeta.deleted_at) {
                      await idbValues.delete(elt.uid)
                      await idbMetadata.delete(elt.uid)
                      return
                   }
-                  if (Array.isArray(result) && result[0]?.uid) {
+                  if (result[0]?.uid) {
                      const returnedValue = { ...result[0] }
                      delete returnedValue.__deleted__
                      await idbValues.put(returnedValue)
                   }
-                  if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
-                  else await idbMetadata.update(elt.uid, { __dirty__: false })
+                  await idbMetadata.put({ ...serverMeta, __dirty__: false })
                })
             } catch(err) {
                console.log("*** err sync user addDatabase", err, elt.uid, fullValue, elt.created_at)
@@ -717,22 +745,21 @@ export function offlinePlugin(app) {
             delete fullValue.__deleted__
             try {
                const result = await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
-               const serverMeta = Array.isArray(result) ? result[1] : null
+               const [, serverMeta] = validateServiceResult(result, elt.uid)
                await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
                   currentMetadata = await idbMetadata.get(elt.uid)
                   if (!metadataUnchangedSinceRequest(currentMetadata, elt)) return
-                  if (Array.isArray(result) && serverMeta?.deleted_at) {
+                  if (serverMeta.deleted_at) {
                      await idbValues.delete(elt.uid)
                      await idbMetadata.delete(elt.uid)
                      return
                   }
-                  if (Array.isArray(result) && result[0]?.uid) {
+                  if (result[0]?.uid) {
                      const returnedValue = { ...result[0] }
                      delete returnedValue.__deleted__
                      await idbValues.put(returnedValue)
                   }
-                  if (serverMeta?.uid) await idbMetadata.put({ ...serverMeta, __dirty__: false })
-                  else await idbMetadata.update(elt.uid, { __dirty__: false })
+                  await idbMetadata.put({ ...serverMeta, __dirty__: false })
                })
             } catch(err) {
                console.log("*** err sync user updateDatabase", err)
@@ -882,6 +909,68 @@ function isDefinitiveServiceError(err) {
       && !(err instanceof Error)
       && typeof err.code === 'string',
    )
+}
+
+function sanitizeMutationData(data) {
+   if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new TypeError('mutation data must be an object')
+   }
+   const { uid: _uid, __deleted__: _deleted, ...safeData } = data
+   return safeData
+}
+
+function isValidServiceResultIdentity(value, meta) {
+   return Boolean(
+      meta
+      && typeof meta === 'object'
+      && typeof meta.uid === 'string'
+      && (!value || (typeof value === 'object' && value.uid === meta.uid)),
+   )
+}
+
+function validateServiceResult(result, expectedUid) {
+   if (!Array.isArray(result) || result.length < 2) {
+      throw new TypeError('service mutation result must be a [value, metadata] tuple')
+   }
+   const [value, meta] = result
+   if (!isValidServiceResultIdentity(value, meta) || meta.uid !== expectedUid) {
+      throw new TypeError(`service mutation result uid must equal '${expectedUid}'`)
+   }
+   return [value, meta]
+}
+
+function validateSyncResult(result) {
+   if (!result || typeof result !== 'object') throw new TypeError('sync result must be an object')
+   const keys = ['addClient', 'updateClient', 'deleteClient', 'addDatabase', 'updateDatabase']
+   for (const key of keys) {
+      if (!Array.isArray(result[key])) throw new TypeError(`sync result '${key}' must be an array`)
+   }
+   for (const tuple of [...result.addClient, ...result.updateClient]) {
+      const uid = tuple?.[0]?.uid
+      if (typeof uid !== 'string') throw new TypeError('sync value uid must be a string')
+      validateServiceResult(tuple, uid)
+   }
+   for (const tuple of result.deleteClient) {
+      if (!Array.isArray(tuple) || typeof tuple[0] !== 'string'
+         || Number.isNaN(new Date(tuple[1]).getTime())) {
+         throw new TypeError('sync deleteClient entry must be a [uid, timestamp] tuple')
+      }
+   }
+   for (const metadata of [...result.addDatabase, ...result.updateDatabase]) {
+      validateMetadata(metadata)
+   }
+   return result
+}
+
+function validateMetadata(metadata) {
+   if (!metadata || typeof metadata !== 'object' || typeof metadata.uid !== 'string') {
+      throw new TypeError('sync metadata must contain a string uid')
+   }
+   for (const field of ['created_at', 'updated_at', 'deleted_at']) {
+      if (metadata[field] != null && Number.isNaN(new Date(metadata[field]).getTime())) {
+         throw new TypeError(`sync metadata '${metadata.uid}.${field}' must be a valid timestamp`)
+      }
+   }
 }
 
 export class Mutex {

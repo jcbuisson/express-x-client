@@ -168,28 +168,38 @@ export async function reloadPlugin(app) {
 
    const cnxid = useSessionStorage('cnxid', '')
    const cnxtoken = useSessionStorage('cnxtoken', '')
+   const handleTransferToken = token => {
+      if (typeof token === 'string') cnxtoken.value = token
+   }
 
    app.addConnectListener(async (socket) => {
       const socketId = socket.id
       console.log('connect', socketId)
       const prevSocketId = cnxid.value
       const prevTransferToken = cnxtoken.value
-      socket.on('cnx-transfer-token', token => {
-         if (typeof token === 'string') cnxtoken.value = token
-      })
+      socket.off('cnx-transfer-token', handleTransferToken)
+      socket.on('cnx-transfer-token', handleTransferToken)
+      cnxid.value = socketId
       if (prevSocketId && prevTransferToken) {
          console.log('cnx-transfer', prevSocketId, 'to', socketId)
-         socket.once('cnx-transfer-ack', async (fromSocketId, toSocketId) => {
+         let timeout
+         const cleanup = () => {
+            clearTimeout(timeout)
+            socket.off('cnx-transfer-ack', handleAck)
+            socket.off('cnx-transfer-error', handleError)
+         }
+         const handleAck = (fromSocketId, toSocketId) => {
             console.log('ACK ACK!!!', fromSocketId, toSocketId)
-            cnxid.value = socketId
-         })
-         socket.once('cnx-transfer-error', async (fromSocketId, toSocketId) => {
+            cleanup()
+         }
+         const handleError = (fromSocketId, toSocketId) => {
             console.log('ERR ERR!!!', fromSocketId, toSocketId)
-            cnxid.value = socketId
-         })
+            cleanup()
+         }
+         socket.once('cnx-transfer-ack', handleAck)
+         socket.once('cnx-transfer-error', handleError)
+         timeout = setTimeout(cleanup, 5000)
          socket.emit('cnx-transfer', prevSocketId, socketId, prevTransferToken)
-      } else {
-         cnxid.value = socketId
       }
    })
 }
@@ -233,7 +243,7 @@ export function offlinePlugin(app) {
                await db.metadata.delete(meta.uid)
                return
             }
-            if (value?.uid) await db.values.put(value);
+            if (value?.uid) await db.values.put(sanitizeServerValue(value));
             if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
          })
       });
@@ -252,7 +262,7 @@ export function offlinePlugin(app) {
                await db.metadata.delete(meta.uid)
                return
             }
-            if (value?.uid) await db.values.put(value);
+            if (value?.uid) await db.values.put(sanitizeServerValue(value));
             if (meta?.uid) await db.metadata.put({ ...meta, __dirty__: false });
          })
       });
@@ -320,7 +330,7 @@ export function offlinePlugin(app) {
                await db.metadata.delete(uid)
                return
             }
-            if (value?.uid) await db.values.put(value)
+            if (value?.uid) await db.values.put(sanitizeServerValue(value))
             await db.metadata.put({ ...meta, __dirty__: false })
          })
       }
@@ -342,7 +352,7 @@ export function offlinePlugin(app) {
                await db.metadata.delete(uid)
                return
             }
-            if (value?.uid) await db.values.put(value)
+            if (value?.uid) await db.values.put(sanitizeServerValue(value))
             await db.metadata.put({ ...meta, __dirty__: false })
          })
       }
@@ -492,6 +502,7 @@ export function offlinePlugin(app) {
       let count = 0;
       
       function addSynchroWhere(where) {
+         validateWhere(where)
          const whereKey = stringifyWithSortedKeys(where)
          ownedWhereCounts.set(whereKey, (ownedWhereCounts.get(whereKey) ?? 0) + 1)
          const refKey = syncScopeRefKey(dbName, whereKey)
@@ -659,7 +670,7 @@ export function offlinePlugin(app) {
                   if (currentMetadata
                      && compareMetadataTime(metaData, currentMetadata) <= 0
                      && !(currentMetadata.deleted_at && !metaData.deleted_at)) continue
-                  await idbValues.put(value)
+                  await idbValues.put(sanitizeServerValue(value))
                   await idbMetadata.put({ ...metaData, __dirty__: false })
                }
             })
@@ -936,6 +947,7 @@ function validateServiceResult(result, expectedUid) {
    if (!isValidServiceResultIdentity(value, meta) || meta.uid !== expectedUid) {
       throw new TypeError(`service mutation result uid must equal '${expectedUid}'`)
    }
+   validateMetadata(meta)
    return [value, meta]
 }
 
@@ -966,9 +978,53 @@ function validateMetadata(metadata) {
    if (!metadata || typeof metadata !== 'object' || typeof metadata.uid !== 'string') {
       throw new TypeError('sync metadata must contain a string uid')
    }
-   for (const field of ['created_at', 'updated_at', 'deleted_at']) {
+   const timestampFields = ['created_at', 'updated_at', 'deleted_at']
+   if (!timestampFields.some(field => metadata[field] != null)) {
+      throw new TypeError(`sync metadata '${metadata.uid}' must contain a timestamp`)
+   }
+   for (const field of timestampFields) {
       if (metadata[field] != null && Number.isNaN(new Date(metadata[field]).getTime())) {
          throw new TypeError(`sync metadata '${metadata.uid}.${field}' must be a valid timestamp`)
+      }
+   }
+}
+
+function sanitizeServerValue(value) {
+   const { __deleted__: _deleted, ...safeValue } = value
+   return safeValue
+}
+
+function validateWhere(where) {
+   if (!where || typeof where !== 'object' || Array.isArray(where)
+      || Object.prototype.toString.call(where) !== '[object Object]') {
+      throw new TypeError('where must be a plain object')
+   }
+   validateJsonFilterValue(where, 'where')
+   return where
+}
+
+function validateJsonFilterValue(value, path) {
+   if (value === undefined || typeof value === 'function'
+      || typeof value === 'symbol' || typeof value === 'bigint') {
+      throw new TypeError(`${path} contains a non-serializable value`)
+   }
+   if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError(`${path} contains a non-finite number`)
+   }
+   if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) throw new TypeError(`${path} contains an invalid Date`)
+      return
+   }
+   if (Array.isArray(value)) {
+      value.forEach((entry, index) => validateJsonFilterValue(entry, `${path}[${index}]`))
+      return
+   }
+   if (value && typeof value === 'object') {
+      if (Object.prototype.toString.call(value) !== '[object Object]') {
+         throw new TypeError(`${path} contains a non-plain object`)
+      }
+      for (const [key, entry] of Object.entries(value)) {
+         validateJsonFilterValue(entry, `${path}.${key}`)
       }
    }
 }

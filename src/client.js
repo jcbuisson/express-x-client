@@ -208,14 +208,17 @@ export async function reloadPlugin(app) {
 //////////////////////////       OFFLINE PLUGIN       //////////////////////////
 // Enrich `app` with methods, attributes and listeners to handle offline-first crud database access
 
-export function offlinePlugin(app) {
+export function offlinePlugin(app, options = {}) {
+   if (typeof options.cacheNamespace !== 'string' || !options.cacheNamespace.trim()) {
+      throw new TypeError('offlinePlugin requires a non-empty cacheNamespace')
+   }
 
    const modelSyncFunctions = new Set()
    const syncScopeRefCounts = new Map()
 
    function createOfflineModel(modelName, fields) {
 
-      const dbName = modelName;
+      const dbName = `${options.cacheNamespace}:${modelName}`;
       const db = getOrCreateDB(dbName, fields);
       const synchronizedWhereKeys = new Set();
       const synchronizeWherePromises = new Map();
@@ -641,7 +644,7 @@ export function offlinePlugin(app) {
             if (Object.hasOwn(clientMetadataDict, metadata.uid)) continue
             const value = await idbValues.get(metadata.uid)
             if (value) {
-               if (!metadata.deleted_at || requestPredicate(value)) clientMetadataDict[metadata.uid] = metadata
+               if (requestPredicate(value)) clientMetadataDict[metadata.uid] = metadata
             } else if (metadata.deleted_at && Object.keys(where).length === 0) {
                clientMetadataDict[metadata.uid] = metadata
             }

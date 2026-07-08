@@ -304,7 +304,7 @@ export function offlinePlugin(app, options = {}) {
          const safeData = sanitizeMutationData(data)
          await db.transaction('rw', [db.values, db.metadata], async () => {
             await db.values.add({ ...safeData, uid })
-            await db.metadata.add({ uid, created_at: now, __dirty__: true })
+            await db.metadata.add({ uid, created_at: now, __dirty__: true, __operation__: 'create' })
          })
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
@@ -384,6 +384,7 @@ export function offlinePlugin(app, options = {}) {
          const safeData = sanitizeMutationData(data)
          let previousValue
          let previousMetadata
+         let fullUpdatedData
          let now
          const updated = await db.transaction('rw', [db.values, db.metadata], async () => {
             const existingValue = await db.values.get(uid)
@@ -392,13 +393,15 @@ export function offlinePlugin(app, options = {}) {
             previousMetadata = { ...(await db.metadata.get(uid)) }
             now = nextMutationTimestamp(previousMetadata)
             await db.values.update(uid, safeData)
-            await db.metadata.put({ uid, ...previousMetadata, updated_at: now, __dirty__: true })
+            fullUpdatedData = sanitizeMutationData({ ...existingValue, ...safeData })
+            const operation = previousMetadata.__operation__ === 'create' ? 'create' : 'update'
+            await db.metadata.put({ uid, ...previousMetadata, updated_at: now, __dirty__: true, __operation__: operation })
             return true
          })
          if (!updated) return undefined
          // execute on server, asynchronously, if connection is active
          if (app.isConnected) {
-            app.service(modelName).updateWithMeta(uid, safeData, now)
+            app.service(modelName).updateWithMeta(uid, fullUpdatedData, now)
             .then(result => applyUpdateAcknowledgement(uid, now, result))
             .catch(async err => {
                console.log(`*** err sync ${modelName} update`, err)
@@ -433,7 +436,7 @@ export function offlinePlugin(app, options = {}) {
             previousMetadata = { ...(await db.metadata.get(uid)) }
             deleted_at = nextMutationTimestamp(previousMetadata)
             await db.values.update(uid, { __deleted__: true })
-            await db.metadata.put({ uid, ...previousMetadata, deleted_at, __dirty__: true })
+            await db.metadata.put({ uid, ...previousMetadata, deleted_at, __dirty__: true, __operation__: 'delete' })
             return true
          })
          if (!removed) return undefined
@@ -539,6 +542,7 @@ export function offlinePlugin(app, options = {}) {
       }
 
       async function synchronizeAll() {
+         await flushDirtyMutations(modelName, db.values, db.metadata)
          await synchronizeModelWhereList(modelName, db.values, db.metadata, db.whereList, synchronizeWhere)
       }
 
@@ -615,6 +619,70 @@ export function offlinePlugin(app, options = {}) {
 
    const mutex = new Mutex()
 
+   async function flushDirtyMutations(modelName, idbValues, idbMetadata) {
+      await mutex.acquire()
+      try {
+         const dirtyMetadataList = await idbMetadata
+            .filter(metadata => metadata.__dirty__ && metadata.__operation__)
+            .toArray()
+
+         for (const requestMetadata of dirtyMetadataList) {
+            if (requestMetadata.uid == null) continue
+            const currentMetadata = await idbMetadata.get(requestMetadata.uid)
+            if (!metadataUnchangedSinceRequest(currentMetadata, requestMetadata)) continue
+
+            try {
+               let result
+               if (requestMetadata.__operation__ === 'delete' || requestMetadata.deleted_at) {
+                  result = await app.service(modelName).deleteWithMeta(requestMetadata.uid, requestMetadata.deleted_at)
+               } else {
+                  const fullValue = await idbValues.get(requestMetadata.uid)
+                  if (fullValue == null || fullValue.__deleted__) continue
+                  const safeData = sanitizeMutationData(fullValue)
+
+                  if (requestMetadata.__operation__ === 'create' && requestMetadata.created_at) {
+                     result = await app.service(modelName).createWithMeta(requestMetadata.uid, safeData, requestMetadata.created_at)
+                     if (requestMetadata.updated_at) {
+                        const [, createMeta] = validateServiceResult(result, requestMetadata.uid)
+                        if (createMeta.deleted_at && compareMetadataTime(createMeta, requestMetadata) >= 0) {
+                           // A newer/equal server tombstone wins; keep it as the final
+                           // acknowledgement instead of resurrecting with the local update.
+                        } else {
+                           result = await app.service(modelName).updateWithMeta(requestMetadata.uid, safeData, requestMetadata.updated_at)
+                        }
+                     }
+                  } else if (requestMetadata.updated_at) {
+                     result = await app.service(modelName).updateWithMeta(requestMetadata.uid, safeData, requestMetadata.updated_at)
+                  } else if (requestMetadata.created_at) {
+                     result = await app.service(modelName).createWithMeta(requestMetadata.uid, safeData, requestMetadata.created_at)
+                  } else {
+                     continue
+                  }
+               }
+
+               const [serverValue, serverMeta] = validateServiceResult(result, requestMetadata.uid)
+               await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
+                  const latestMetadata = await idbMetadata.get(requestMetadata.uid)
+                  if (!metadataUnchangedSinceRequest(latestMetadata, requestMetadata)) return
+                  if (serverMeta.deleted_at) {
+                     await idbValues.delete(requestMetadata.uid)
+                     await idbMetadata.delete(requestMetadata.uid)
+                     return
+                  }
+                  if (serverValue?.uid) await idbValues.put(sanitizeServerValue(serverValue))
+                  await idbMetadata.put({ ...serverMeta, __dirty__: false })
+               })
+            } catch(err) {
+               console.log("*** err flush dirty mutation", modelName, requestMetadata.uid, err)
+               // Keep the durable dirty marker. The mutation is idempotent and will
+               // be retried on the next reconnect or explicit synchronizeAll().
+            }
+         }
+      } finally {
+         mutex.release()
+      }
+   }
+
    // ex: where = { uid: 'azer' }
    async function synchronize(modelName, idbValues, idbMetadata, where) {
       await mutex.acquire()
@@ -634,7 +702,9 @@ export function offlinePlugin(app, options = {}) {
             } else {
                // Repair old/corrupt IndexedDB state where a visible value exists
                // without metadata; otherwise the server receives {} and cannot sync it.
-               const repairedMetadata = { uid: value.uid, created_at: new Date(), __dirty__: true }
+               // Use the oldest possible timestamp: a repaired cache row has unknown
+               // provenance and must not beat a real server version or tombstone.
+               const repairedMetadata = { uid: value.uid, created_at: new Date(0), __dirty__: true, __repaired__: true }
                await idbMetadata.put(repairedMetadata)
                clientMetadataDict[value.uid] = repairedMetadata
             }
@@ -758,7 +828,8 @@ export function offlinePlugin(app, options = {}) {
             delete fullValue.uid
             delete fullValue.__deleted__
             try {
-               const result = await app.service(modelName).updateWithMeta(elt.uid, fullValue, elt.updated_at)
+               const updateTimestamp = elt.updated_at ?? elt.created_at
+               const result = await app.service(modelName).updateWithMeta(elt.uid, fullValue, updateTimestamp)
                const [, serverMeta] = validateServiceResult(result, elt.uid)
                await idbValues.db.transaction('rw', [idbValues, idbMetadata], async () => {
                   currentMetadata = await idbMetadata.get(elt.uid)
